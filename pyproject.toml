@@ -1,0 +1,57 @@
+[project]
+name = "glue-doctor"
+dynamic = ["version"]
+description = "Audit CLI for AWS Glue jobs: timeouts, Glue versions and observability settings"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+authors = [{ name = "Vinicius Pereira", email = "vp.vinicius.pereira@gmail.com" }]
+keywords = ["aws", "glue", "audit", "etl", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "boto3>=1.35.0",
+    "click>=8.2",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/vinpereira/glue-doctor"
+Changelog = "https://github.com/vinpereira/glue-doctor/blob/main/CHANGELOG.md"
+
+[project.scripts]
+glue-doctor = "glue_doctor.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "glue_doctor/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["glue_doctor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "moto[glue]>=5.0.0",
+    "jsonschema>=4.0.0",
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# `ruff format` owns line length; E501 would make `make lint` fail on long strings and
+# comments that the formatter cannot (and should not) wrap.
+ignore = ["E501"]
