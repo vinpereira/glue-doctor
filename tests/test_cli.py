@@ -1,0 +1,186 @@
+import json
+import subprocess
+import sys
+import textwrap
+
+import pytest
+from click.testing import CliRunner
+
+from glue_doctor import cli as cli_module
+from glue_doctor.cli import cli
+from glue_doctor.collector import AuditAborted, AwsContext
+from glue_doctor.models import CollectIssue
+from tests.factories import make_job
+
+
+@pytest.fixture
+def fake_aws(monkeypatch):
+    def install(snapshots):
+        seen = {}
+
+        def fake_connect(profile, region):
+            seen["profile"], seen["region"] = profile, region
+            return AwsContext(client=object(), region="eu-central-1", account_id="123456789012")
+
+        def fake_collect(client, job_filter, wanted_runs):
+            seen["filter"], seen["wanted"] = job_filter, wanted_runs
+            return snapshots
+
+        monkeypatch.setattr(cli_module, "connect", fake_connect)
+        monkeypatch.setattr(cli_module, "collect_snapshots", fake_collect)
+        return seen
+
+    return install
+
+
+@pytest.fixture(autouse=True)
+def empty_cwd(tmp_path, monkeypatch):
+    """Run every test in an empty directory so no stray glue-doctor.toml is discovered."""
+    monkeypatch.chdir(tmp_path)
+
+
+def audit(*args):
+    return CliRunner().invoke(cli, ["audit", *args])
+
+
+def noisy():
+    return make_job(timeout=2880, runs=())  # generous warning via the absolute cap
+
+
+def test_clean_audit_exits_zero(fake_aws):
+    fake_aws([make_job(runs=())])
+    result = audit("--format", "json")
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["summary"]["findings"] == {"error": 0, "warning": 0, "info": 0}
+    assert report["scope"] == {"region": "eu-central-1", "account_id": "123456789012"}
+
+
+def test_account_with_zero_jobs_is_clean(fake_aws):
+    fake_aws([])
+    result = audit()
+    assert result.exit_code == 0
+    assert "No findings in 0 job(s)" in result.stdout
+
+
+def test_warning_finding_fails_by_default(fake_aws):
+    fake_aws([noisy()])
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert report["findings"][0]["check_id"] == "timeout-too-generous"
+    assert report["summary"]["exit_code"] == 1
+
+
+@pytest.mark.parametrize("fail_on, expected", [("error", 0), ("never", 0), ("info", 1)])
+def test_fail_on_flag(fake_aws, fail_on, expected):
+    fake_aws([noisy()])
+    assert audit("--fail-on", fail_on).exit_code == expected
+
+
+def test_info_only_findings_do_not_fail_by_default(fake_aws):
+    fake_aws([make_job(runs=(), special_args={})])  # observability-off is info
+    assert audit().exit_code == 0
+
+
+def test_collect_error_fails_the_audit(fake_aws):
+    fake_aws([make_job(collect_issues=(CollectIssue("GetJobRuns", "AccessDeniedException"),))])
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["findings"][0]["check_id"] == "collect-error"
+
+
+def test_audit_aborted_exits_three(monkeypatch):
+    def boom(profile, region):
+        raise AuditAborted("NoCredentialsError: Unable to locate credentials")
+
+    monkeypatch.setattr(cli_module, "connect", boom)
+    result = audit()
+    assert result.exit_code == 3
+    assert "Unable to locate credentials" in result.stderr
+    assert result.stdout == ""
+
+
+def test_invalid_config_exits_two(fake_aws, tmp_path):
+    fake_aws([])
+    path = tmp_path / "bad.toml"
+    path.write_text("bogus = 1\n")
+    result = audit("--config", str(path))
+    assert result.exit_code == 2
+    assert "bogus" in result.stderr
+
+
+def test_missing_explicit_config_exits_two(fake_aws, tmp_path):
+    fake_aws([])
+    result = audit("--config", str(tmp_path / "nope.toml"))
+    assert result.exit_code == 2
+    assert "not found" in result.stderr
+
+
+def test_config_file_in_working_directory_is_discovered(fake_aws, tmp_path):
+    fake_aws([noisy()])
+    (tmp_path / "glue-doctor.toml").write_text('fail_on = "never"\n')
+    assert audit().exit_code == 0
+
+
+def test_flags_override_the_config_file(fake_aws, tmp_path):
+    seen = fake_aws([])
+    (tmp_path / "glue-doctor.toml").write_text('region = "eu-west-1"\nprofile = "from-file"\n')
+    audit("--region", "eu-north-1")
+    assert seen["region"] == "eu-north-1" and seen["profile"] == "from-file"
+
+
+def test_job_flag_overrides_include_and_wanted_runs_follow_config(fake_aws):
+    seen = fake_aws([])
+    audit("--job", "etl-*")
+    assert seen["filter"]("etl-a") and not seen["filter"]("other")
+    assert seen["wanted"] == 20
+
+
+def test_warnings_go_to_stderr_and_stdout_stays_valid_json(fake_aws, tmp_path):
+    fake_aws([noisy()])
+    (tmp_path / "glue-doctor.toml").write_text(
+        '[[suppress]]\ncheck = "timeout-too-generous"\nreason = "x"\nuntil = 2020-01-01\n'
+    )
+    result = audit("--format", "json")
+    assert "expired on 2020-01-01" in result.stderr
+    json.loads(result.stdout)
+
+
+def test_table_output(fake_aws):
+    fake_aws([noisy()])
+    result = CliRunner().invoke(cli, ["audit"], env={"COLUMNS": "200"})
+    assert "timeout-too-generous" in result.stdout and "example-job" in result.stdout
+
+
+def test_help_lists_every_check_without_credentials():
+    result = CliRunner().invoke(cli, ["audit", "--help"])
+    assert result.exit_code == 0
+    for check_id in (
+        "timeout-too-generous",
+        "timeout-too-tight",
+        "glue-version",
+        "observability-off",
+        "collect-error",
+    ):
+        assert check_id in result.stdout
+
+
+def test_json_format_never_imports_rich():
+    code = textwrap.dedent(
+        """
+        import sys
+        from unittest import mock
+        from click.testing import CliRunner
+        from glue_doctor import cli as cli_module
+        from glue_doctor.collector import AwsContext
+
+        ctx = AwsContext(client=object(), region="eu-central-1", account_id=None)
+        with mock.patch.object(cli_module, "connect", return_value=ctx), \\
+             mock.patch.object(cli_module, "collect_snapshots", return_value=[]):
+            result = CliRunner().invoke(cli_module.cli, ["audit", "--format", "json"])
+        assert result.exit_code == 0, result.output
+        assert "rich" not in sys.modules, "rich was imported on the JSON path"
+        """
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
