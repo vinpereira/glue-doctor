@@ -36,6 +36,9 @@ path = "glue_doctor/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["glue_doctor"]
 
+[tool.hatch.build.targets.sdist]
+include = ["glue_doctor", "tests", "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
