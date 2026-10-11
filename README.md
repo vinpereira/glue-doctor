@@ -52,7 +52,7 @@ Example output:
 | `timeout-too-generous` | warning | Timeout far above the median runtime of recent successful runs (or above an absolute cap when there is little history) |
 | `timeout-too-tight` | warning | Recent runs take most of the timeout (p95 above 80% of it) |
 | `glue-version` | warning below 5.0, info below 5.1 | Glue version older than the configured minimum. Glue 5.1 and 6.0 are supported |
-| `observability-off` | info | Job run insights, metrics or continuous logging not enabled |
+| `observability-off` | info | `--enable-metrics` absent, job run insights explicitly disabled, or continuous logging off (only checked on Glue 4.0 and earlier; from 5.0 every job has real-time logging) |
 | `collect-error` | warning | A job's data could not be read, so the audit of that job is incomplete |
 
 Streaming jobs are skipped by the timeout checks; Python shell jobs are skipped by the version and

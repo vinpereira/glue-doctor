@@ -56,10 +56,14 @@ def test_version_params_are_validated():
 
 
 # --- observability-off ----------------------------------------------------
+# Semantics follow the Glue documentation: --enable-metrics is a presence-based flag,
+# --enable-job-insights is on by default, and continuous logging is deprecated in Glue 5.0+
+# (every job has real-time logging there).
 
 
 def test_observability_reports_all_missing_flags_in_one_finding():
-    [finding] = check_observability(make_job(special_args={}), ObservabilityParams())
+    job = make_job(glue_version=(4, 0), special_args={"--enable-job-insights": "false"})
+    [finding] = check_observability(job, ObservabilityParams())
     assert finding.check_id == "observability-off"
     assert finding.severity is Severity.INFO
     assert finding.evidence["missing"] == list(FLAGS.values())
@@ -67,19 +71,53 @@ def test_observability_reports_all_missing_flags_in_one_finding():
 
 def test_observability_clean_when_all_enabled_case_insensitive():
     args = {flag: "TRUE" for flag in FLAGS.values()}
-    assert check_observability(make_job(special_args=args), ObservabilityParams()) == []
+    assert (
+        check_observability(make_job(glue_version=(4, 0), special_args=args), ObservabilityParams())
+        == []
+    )
 
 
-def test_observability_false_counts_as_missing():
-    args = {flag: "true" for flag in FLAGS.values()}
-    args["--enable-metrics"] = "false"
-    [finding] = check_observability(make_job(special_args=args), ObservabilityParams())
+@pytest.mark.parametrize("value", ["", "true", "anything"])
+def test_metrics_is_presence_based(value):
+    job = make_job(special_args={"--enable-metrics": value})
+    assert check_observability(job, ObservabilityParams()) == []
+
+
+def test_metrics_absent_is_reported():
+    [finding] = check_observability(make_job(special_args={}), ObservabilityParams())
     assert finding.evidence["missing"] == ["--enable-metrics"]
+
+
+def test_job_insights_is_on_by_default():
+    job = make_job(special_args={"--enable-metrics": ""})
+    assert check_observability(job, ObservabilityParams()) == []
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", " False "])
+def test_job_insights_explicitly_false_is_reported(value):
+    job = make_job(special_args={"--enable-metrics": "", "--enable-job-insights": value})
+    [finding] = check_observability(job, ObservabilityParams())
+    assert finding.evidence["missing"] == ["--enable-job-insights"]
+
+
+@pytest.mark.parametrize("version", [(5, 0), (5, 1), (6, 0), (7, 0), None])
+def test_continuous_logging_not_required_from_glue_5_or_when_unknown(version):
+    job = make_job(glue_version=version, special_args={"--enable-metrics": ""})
+    assert check_observability(job, ObservabilityParams()) == []
+
+
+@pytest.mark.parametrize("version", [(3, 0), (4, 0)])
+@pytest.mark.parametrize("args", [{}, {"--enable-continuous-cloudwatch-log": "false"}])
+def test_continuous_logging_required_before_glue_5(version, args):
+    job = make_job(glue_version=version, special_args={"--enable-metrics": "", **args})
+    [finding] = check_observability(job, ObservabilityParams())
+    assert finding.evidence["missing"] == ["--enable-continuous-cloudwatch-log"]
 
 
 def test_observability_require_is_configurable():
     params = ObservabilityParams(require=("metrics",))
-    [finding] = check_observability(make_job(special_args={}), params)
+    job = make_job(glue_version=(4, 0), special_args={})
+    [finding] = check_observability(job, params)
     assert finding.evidence["missing"] == ["--enable-metrics"]
 
 
@@ -88,8 +126,11 @@ def test_observability_skips_non_spark_jobs():
     assert check_observability(job, ObservabilityParams()) == []
 
 
-def test_job_insights_not_required_before_glue_2():
-    job = make_job(glue_version=(1, 0), special_args={})
+def test_job_insights_not_checked_before_glue_2():
+    job = make_job(
+        glue_version=(1, 0),
+        special_args={"--enable-metrics": "", "--enable-job-insights": "false"},
+    )
     [finding] = check_observability(job, ObservabilityParams())
     assert "--enable-job-insights" not in finding.evidence["missing"]
 
