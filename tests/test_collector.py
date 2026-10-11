@@ -211,6 +211,22 @@ def test_connect_requires_a_region(no_aws_config):
         connect(None, None)
 
 
+def test_connect_rejects_an_empty_region_from_the_environment(no_aws_config, monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "")
+    with pytest.raises(AuditAborted, match="region"):
+        connect(None, None)
+
+
+def test_connect_rejects_an_empty_region_argument(no_aws_config):
+    with pytest.raises(AuditAborted, match="region"):
+        connect(None, "")
+
+
+def test_connect_rejects_a_malformed_region(no_aws_config):
+    with pytest.raises(AuditAborted, match="region"):
+        connect(None, "not a region")
+
+
 def test_connect_reports_unknown_profile(no_aws_config):
     with pytest.raises(AuditAborted, match="ProfileNotFound"):
         connect("does-not-exist", "eu-central-1")

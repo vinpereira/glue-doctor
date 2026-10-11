@@ -68,10 +68,19 @@ def _string_list(where: str, value: Any) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _glob_list(where: str, value: Any, *, allow_empty_list: bool) -> tuple[str, ...]:
+    patterns = _string_list(where, value)
+    if not patterns and not allow_empty_list:
+        raise ConfigError(f"{where}: must not be empty (omit the key to audit every job)")
+    if not all(p.strip() for p in patterns):
+        raise ConfigError(f"{where}: patterns must not be empty")
+    return patterns
+
+
 def _optional_string(data: Mapping[str, Any], key: str) -> str | None:
     value = data.get(key)
-    if value is not None and not isinstance(value, str):
-        raise ConfigError(f"{key}: expected a string")
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ConfigError(f"{key}: expected a non-empty string")
     return value
 
 
@@ -100,8 +109,12 @@ def _parse_jobs(raw: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
     unknown = set(raw) - {"include", "exclude"}
     if unknown:
         raise ConfigError(f"[jobs]: unknown key(s): {', '.join(sorted(unknown))}")
-    include = _string_list("[jobs].include", raw["include"]) if "include" in raw else ("*",)
-    exclude = _string_list("[jobs].exclude", raw["exclude"]) if "exclude" in raw else ()
+    include = ("*",)
+    if "include" in raw:
+        include = _glob_list("[jobs].include", raw["include"], allow_empty_list=False)
+    exclude = ()
+    if "exclude" in raw:
+        exclude = _glob_list("[jobs].exclude", raw["exclude"], allow_empty_list=True)
     return include, exclude
 
 
@@ -156,14 +169,14 @@ def _parse_suppressions(raw: Any) -> tuple[Suppression, ...]:
         if unknown:
             raise ConfigError(f"{where}: unknown key(s): {', '.join(sorted(unknown))}")
         check = item.get("check")
-        if check not in REGISTRY:
+        if not isinstance(check, str) or check not in REGISTRY:
             raise ConfigError(f"{where}: unknown check {check!r}")
         reason = item.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ConfigError(f"{where}: 'reason' is required and must not be empty")
         job = item.get("job", "*")
-        if not isinstance(job, str):
-            raise ConfigError(f"{where}: 'job' must be a string glob")
+        if not isinstance(job, str) or not job.strip():
+            raise ConfigError(f"{where}: 'job' must be a non-empty string glob")
         until = item.get("until")
         if until is not None and type(until) is not date:
             raise ConfigError(f"{where}: 'until' must be a TOML date (YYYY-MM-DD)")
@@ -197,6 +210,8 @@ def load_config(path: Path | None) -> Config:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ConfigError(f"config file not found: {path}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"cannot read config file {path}: {type(exc).__name__}") from exc
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:

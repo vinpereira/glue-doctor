@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from glue_doctor import cli as cli_module
 from glue_doctor.cli import cli
-from glue_doctor.collector import AuditAborted, AwsContext
+from glue_doctor.collector import AuditAborted, AwsContext, ReadOnlyViolation
 from glue_doctor.models import CollectIssue
 from tests.factories import make_job
 
@@ -99,6 +99,55 @@ def test_audit_aborted_exits_three(monkeypatch):
     assert result.exit_code == 3
     assert "Unable to locate credentials" in result.stderr
     assert result.stdout == ""
+
+
+def test_unexpected_error_exits_three_without_leaking_details(fake_aws, monkeypatch):
+    fake_aws([])
+
+    def boom(client, job_filter, wanted_runs):
+        raise RuntimeError("secret-looking detail")
+
+    monkeypatch.setattr(cli_module, "collect_snapshots", boom)
+    result = audit()
+    assert result.exit_code == 3
+    assert "internal error: RuntimeError" in result.stderr
+    assert "secret-looking detail" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_read_only_violation_is_an_internal_error_not_a_finding(fake_aws, monkeypatch):
+    fake_aws([])
+
+    def blocked(client, job_filter, wanted_runs):
+        raise ReadOnlyViolation("operation UpdateJob is not allowed")
+
+    monkeypatch.setattr(cli_module, "collect_snapshots", blocked)
+    result = audit()
+    assert result.exit_code == 3
+    assert "ReadOnlyViolation" in result.stderr
+
+
+def test_empty_job_glob_is_a_usage_error(fake_aws):
+    fake_aws([])
+    result = audit("--job", "")
+    assert result.exit_code == 2
+    assert "--job" in result.stderr
+
+
+def test_no_matching_jobs_warns_on_stderr_but_stays_clean(fake_aws):
+    fake_aws([])
+    result = audit("--format", "json")
+    assert result.exit_code == 0
+    assert "no jobs" in result.stderr.lower()
+    json.loads(result.stdout)
+
+
+def test_non_utf8_config_exits_two(fake_aws, tmp_path):
+    fake_aws([])
+    (tmp_path / "glue-doctor.toml").write_bytes(b"\xff\xfe\x00")
+    result = audit()
+    assert result.exit_code == 2
+    assert "cannot read" in result.stderr
 
 
 def test_invalid_config_exits_two(fake_aws, tmp_path):

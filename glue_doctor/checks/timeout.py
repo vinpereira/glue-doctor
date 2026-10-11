@@ -25,12 +25,14 @@ class GenerousParams:
     cap_minutes: int = 1440
 
     def __post_init__(self) -> None:
-        if self.max_ratio <= 0:
-            raise ValueError("max_ratio must be greater than 0")
+        if not math.isfinite(self.max_ratio) or self.max_ratio <= 0:
+            raise ValueError("max_ratio must be a finite number greater than 0")
         if self.history < 1:
             raise ValueError("history must be at least 1")
         if self.min_runs < 1:
             raise ValueError("min_runs must be at least 1")
+        if self.min_runs > self.history:
+            raise ValueError("min_runs must not exceed history")
         if self.cap_minutes < 1:
             raise ValueError("cap_minutes must be at least 1")
 
@@ -90,6 +92,8 @@ class TightParams:
             raise ValueError("history must be at least 1")
         if self.min_runs < 1:
             raise ValueError("min_runs must be at least 1")
+        if self.min_runs > self.history:
+            raise ValueError("min_runs must not exceed history")
 
 
 def check_tight(job: JobSnapshot, params: TightParams) -> list[Finding]:

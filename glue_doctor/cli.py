@@ -59,8 +59,25 @@ def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
     """Audit the AWS Glue jobs of one account and region (read-only).
 
     Exit codes: 0 no finding at or above --fail-on, 1 findings, 2 usage or config error,
-    3 audit impossible (for example missing credentials).
+    3 audit impossible (for example missing credentials) or internal error.
     """
+    try:
+        code = _run_audit(config_path, region, profile, fmt, fail_on, jobs)
+    except (click.ClickException, click.exceptions.Exit):
+        raise
+    except Exception as exc:  # a crash must never look like "findings found" (exit 1)
+        click.echo(
+            f"Error: internal error: {type(exc).__name__}. "
+            "Please report it at https://github.com/vinpereira/glue-doctor/issues",
+            err=True,
+        )
+        code = 3
+    ctx.exit(code)
+
+
+def _run_audit(config_path, region, profile, fmt, fail_on, jobs) -> int:
+    if any(not job.strip() for job in jobs):
+        raise click.UsageError("--job must not be empty")
     try:
         config = load_config(discover_config_path(config_path))
     except ConfigError as exc:
@@ -77,7 +94,12 @@ def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
         snapshots = collect_snapshots(aws.client, config.job_selected, runs_needed(config))
     except AuditAborted as exc:
         click.echo(f"Error: {exc}", err=True)
-        ctx.exit(3)
+        return 3
+    if not snapshots:
+        click.echo(
+            "Warning: no jobs were audited; check --job/include patterns and the region",
+            err=True,
+        )
     result = run_checks(snapshots, config, date.today())
     for warning in result.warnings:
         click.echo(f"Warning: {warning}", err=True)
@@ -87,4 +109,4 @@ def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
         click.echo(render_json(report))
     else:
         render_table(report)
-    ctx.exit(code)
+    return code

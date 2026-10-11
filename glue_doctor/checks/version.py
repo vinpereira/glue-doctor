@@ -14,6 +14,8 @@ class VersionParams:
         for name in ("warn_below", "info_below"):
             if parse_glue_version(getattr(self, name)) is None:
                 raise ValueError(f"{name}: invalid Glue version {getattr(self, name)!r}")
+        if parse_glue_version(self.warn_below) > parse_glue_version(self.info_below):
+            raise ValueError("warn_below must not be greater than info_below")
 
 
 def check_version(job: JobSnapshot, params: VersionParams) -> list[Finding]:

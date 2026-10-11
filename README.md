@@ -65,7 +65,7 @@ observability checks. `glue-doctor audit --help` lists every check.
 | 0 | No finding at or above `--fail-on` (default `warning`) |
 | 1 | At least one finding at or above the threshold (including `collect-error`) |
 | 2 | Usage or configuration error |
-| 3 | Audit impossible (no credentials, `GetJobs` denied, no region) |
+| 3 | Audit impossible (no credentials, `GetJobs` denied, no or invalid region) or an internal error |
 
 ## Configuration
 

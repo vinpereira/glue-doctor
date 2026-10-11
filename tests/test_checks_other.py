@@ -36,7 +36,8 @@ def test_message_mentions_runtime_for_known_versions():
 
 
 def test_version_thresholds_are_configurable():
-    [finding] = check_version(make_job(glue_version=(5, 1)), VersionParams(warn_below="6.0"))
+    strict = VersionParams(warn_below="6.0", info_below="6.0")
+    [finding] = check_version(make_job(glue_version=(5, 1)), strict)
     assert finding.severity is Severity.WARNING
     assert check_version(make_job(glue_version=(5, 0)), VersionParams(info_below="5.0")) == []
 
@@ -53,6 +54,12 @@ def test_version_params_are_validated():
         VersionParams(warn_below="abc")
     with pytest.raises(ValueError, match="info_below"):
         VersionParams(info_below="")
+
+
+def test_warn_below_must_not_exceed_info_below():
+    with pytest.raises(ValueError, match="warn_below"):
+        VersionParams(warn_below="5.1", info_below="4.0")
+    VersionParams(warn_below="5.0", info_below="5.0")  # equal thresholds are allowed
 
 
 # --- observability-off ----------------------------------------------------

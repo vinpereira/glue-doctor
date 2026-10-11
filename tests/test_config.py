@@ -95,6 +95,17 @@ def test_suppression_job_defaults_to_all_jobs():
         ('[[suppress]]\ncheck = "glue-version"', "reason"),
         ('[[suppress]]\ncheck = "glue-version"\nreason = "  "', "reason"),
         ('[[suppress]]\ncheck = "nope"\nreason = "x"', "nope"),
+        ('region = ""', "region"),
+        ('profile = "  "', "profile"),
+        ("[jobs]\ninclude = []", "include"),
+        ('[jobs]\ninclude = [""]', "include"),
+        ('[jobs]\nexclude = [" "]', "exclude"),
+        ('[[suppress]]\ncheck = ["glue-version"]\nreason = "x"', "check"),
+        ('[[suppress]]\ncheck = "glue-version"\nreason = "x"\njob = ""', "job"),
+        ("[checks.timeout-too-generous]\nmin_runs = 30", "min_runs"),
+        ("[checks.timeout-too-tight]\nmin_runs = 30", "min_runs"),
+        ("[checks.timeout-too-generous]\nmax_ratio = nan", "max_ratio"),
+        ('[checks.glue-version]\nwarn_below = "5.1"\ninfo_below = "4.0"', "warn_below"),
         ('[[suppress]]\ncheck = "glue-version"\nreason = "x"\nuntil = "2027-01-31"', "until"),
         (
             '[[suppress]]\ncheck = "glue-version"\nreason = "x"\nuntil = 2027-01-31T10:00:00',
@@ -127,6 +138,18 @@ def test_load_config_invalid_toml(tmp_path):
     path.write_text("fail_on = ")
     with pytest.raises(ConfigError, match="invalid TOML"):
         load_config(path)
+
+
+def test_load_config_non_utf8_file(tmp_path):
+    path = tmp_path / "glue-doctor.toml"
+    path.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(ConfigError, match="cannot read"):
+        load_config(path)
+
+
+def test_load_config_path_is_a_directory(tmp_path):
+    with pytest.raises(ConfigError, match="cannot read"):
+        load_config(tmp_path)
 
 
 def test_discover_config_path(tmp_path):

@@ -92,6 +92,9 @@ def test_generous_history_limits_the_sample():
         ({"history": 0}, "history"),
         ({"min_runs": 0}, "min_runs"),
         ({"cap_minutes": 0}, "cap_minutes"),
+        ({"max_ratio": float("nan")}, "max_ratio"),
+        ({"max_ratio": float("inf")}, "max_ratio"),
+        ({"history": 3, "min_runs": 5}, "min_runs"),
     ],
 )
 def test_generous_params_are_validated(kwargs, field):
@@ -146,7 +149,9 @@ def test_tight_skips_streaming_and_uncollected():
     [
         ({"p95_ratio": 0}, "p95_ratio"),
         ({"p95_ratio": 1.5}, "p95_ratio"),
+        ({"p95_ratio": float("nan")}, "p95_ratio"),
         ({"history": 0}, "history"),
+        ({"history": 3, "min_runs": 5}, "min_runs"),
     ],
 )
 def test_tight_params_are_validated(kwargs, field):

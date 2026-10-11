@@ -85,12 +85,12 @@ def connect(profile: str | None, region: str | None) -> AwsContext:
     try:
         session = boto3.Session(profile_name=profile, region_name=region)
         region_name = session.region_name
-        if region_name is None:
+        if not region_name:
             raise AuditAborted("no AWS region configured; pass --region or set AWS_DEFAULT_REGION")
         glue = session.client("glue", config=_BOTO_CONFIG)
         install_read_only_guard(glue)
         account_id = account_id_of(session.client("sts"))
-    except BotoCoreError as exc:  # for example ProfileNotFound, raised on client creation
+    except (BotoCoreError, ValueError) as exc:  # e.g. ProfileNotFound or an invalid endpoint
         raise AuditAborted(_describe(exc)) from exc
     return AwsContext(client=glue, region=region_name, account_id=account_id)
 
