@@ -23,6 +23,7 @@ class GenerousParams:
     history: int = 20
     min_runs: int = 5
     cap_minutes: int = 1440
+    min_timeout_minutes: int = 120
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.max_ratio) or self.max_ratio <= 0:
@@ -35,6 +36,8 @@ class GenerousParams:
             raise ValueError("min_runs must not exceed history")
         if self.cap_minutes < 1:
             raise ValueError("cap_minutes must be at least 1")
+        if self.min_timeout_minutes < 1:
+            raise ValueError("min_timeout_minutes must be at least 1")
 
 
 def check_generous(job: JobSnapshot, params: GenerousParams) -> list[Finding]:
@@ -50,7 +53,9 @@ def check_generous(job: JobSnapshot, params: GenerousParams) -> list[Finding]:
     if len(successes) >= params.min_runs:
         typical = max(median(r.execution_seconds for r in successes) / 60, 1.0)
         ratio = timeout / typical
-        if ratio <= params.max_ratio:
+        # A short timeout (say 60 min) on a 2 min job is a sensible safety net, not a risk: only
+        # timeouts above the minimum are worth a finding, however large the ratio is.
+        if timeout <= params.min_timeout_minutes or ratio <= params.max_ratio:
             return []
         evidence = {**base, "median_min": round(typical, 1), "ratio": round(ratio, 1)}
         message = (

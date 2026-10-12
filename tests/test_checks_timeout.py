@@ -31,15 +31,46 @@ def test_generous_flags_timeout_far_above_median():
 
 
 def test_generous_ratio_boundary_is_exclusive():
-    # median 10 min, max_ratio 10 -> 100 min is allowed, 101 is not
-    assert check_generous(make_job(timeout=100, runs=runs(5)), GenerousParams()) == []
-    assert len(check_generous(make_job(timeout=101, runs=runs(5)), GenerousParams())) == 1
+    # median 30 min, max_ratio 10 -> 300 min is allowed, 301 is not
+    slow = runs(5, seconds=1800)
+    assert check_generous(make_job(timeout=300, runs=slow), GenerousParams()) == []
+    assert len(check_generous(make_job(timeout=301, runs=slow), GenerousParams())) == 1
 
 
 def test_generous_median_is_floored_at_one_minute():
     quick = runs(5, seconds=10)
-    assert check_generous(make_job(timeout=10, runs=quick), GenerousParams()) == []
-    assert len(check_generous(make_job(timeout=11, runs=quick), GenerousParams())) == 1
+    params = GenerousParams(min_timeout_minutes=1)
+    assert check_generous(make_job(timeout=10, runs=quick), params) == []
+    assert len(check_generous(make_job(timeout=11, runs=quick), params)) == 1
+
+
+def test_generous_ignores_timeouts_up_to_the_minimum():
+    # a 60 min timeout on a 2 min job is a sensible safety net, not a risk
+    quick = runs(20, seconds=120)
+    assert check_generous(make_job(timeout=60, runs=quick), GenerousParams()) == []
+    assert check_generous(make_job(timeout=120, runs=quick), GenerousParams()) == []
+    assert len(check_generous(make_job(timeout=121, runs=quick), GenerousParams())) == 1
+
+
+def test_generous_still_flags_two_day_timeouts_on_short_jobs():
+    [finding] = check_generous(make_job(timeout=2880, runs=runs(20)), GenerousParams())
+    assert finding.evidence["ratio"] == 288.0
+
+
+def test_generous_minimum_timeout_is_configurable():
+    quick = runs(20, seconds=120)
+    assert (
+        len(
+            check_generous(make_job(timeout=60, runs=quick), GenerousParams(min_timeout_minutes=30))
+        )
+        == 1
+    )
+    assert (
+        check_generous(
+            make_job(timeout=2880, runs=runs(20)), GenerousParams(min_timeout_minutes=5000)
+        )
+        == []
+    )
 
 
 def test_generous_few_runs_falls_back_to_absolute_cap():
@@ -80,7 +111,7 @@ def test_generous_skips_streaming_jobs():
 
 def test_generous_history_limits_the_sample():
     sample = runs(5, seconds=60) + runs(20, seconds=6000)
-    [finding] = check_generous(make_job(timeout=100, runs=sample), GenerousParams(history=5))
+    [finding] = check_generous(make_job(timeout=200, runs=sample), GenerousParams(history=5))
     assert finding.evidence["runs_used"] == 5
     assert finding.evidence["median_min"] == 1.0
 
@@ -92,6 +123,7 @@ def test_generous_history_limits_the_sample():
         ({"history": 0}, "history"),
         ({"min_runs": 0}, "min_runs"),
         ({"cap_minutes": 0}, "cap_minutes"),
+        ({"min_timeout_minutes": 0}, "min_timeout_minutes"),
         ({"max_ratio": float("nan")}, "max_ratio"),
         ({"max_ratio": float("inf")}, "max_ratio"),
         ({"history": 3, "min_runs": 5}, "min_runs"),

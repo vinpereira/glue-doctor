@@ -74,6 +74,12 @@ until = 2027-01-31
     )
 
 
+def test_min_timeout_minutes_is_configurable():
+    cfg = parse("[checks.timeout-too-generous]\nmin_timeout_minutes = 30")
+    assert cfg.checks["timeout-too-generous"].params.min_timeout_minutes == 30
+    assert default_config().checks["timeout-too-generous"].params.min_timeout_minutes == 120
+
+
 def test_suppression_job_defaults_to_all_jobs():
     cfg = parse('[[suppress]]\ncheck = "glue-version"\nreason = "x"')
     assert cfg.suppressions[0].job == "*" and cfg.suppressions[0].until is None

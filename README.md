@@ -49,7 +49,7 @@ Example output:
 
 | ID | Default severity | What it detects |
 |---|---|---|
-| `timeout-too-generous` | warning | Timeout far above the median runtime of recent successful runs (or above an absolute cap when there is little history) |
+| `timeout-too-generous` | warning | Timeout far above the median runtime of recent successful runs, once it exceeds a minimum (2 h by default; short timeouts are a sensible safety net). With little history, a timeout above an absolute cap |
 | `timeout-too-tight` | warning | Recent runs take most of the timeout (p95 above 80% of it) |
 | `glue-version` | warning below 5.0, info below 5.1 | Glue version older than the configured minimum. Glue 5.1 and 6.0 are supported |
 | `observability-off` | info | `--enable-metrics` absent, job run insights explicitly disabled, or continuous logging off (only checked on Glue 4.0 and earlier; from 5.0 every job has real-time logging) |
@@ -87,6 +87,7 @@ max_ratio   = 10.0           # timeout / median of successful runs
 history     = 20             # last N successful runs
 min_runs    = 5              # fewer runs: fall back to cap_minutes
 cap_minutes = 1440
+min_timeout_minutes = 120    # ignore timeouts up to this value, whatever the ratio
 
 [checks.timeout-too-tight]
 p95_ratio = 0.8
