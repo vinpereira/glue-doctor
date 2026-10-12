@@ -18,3 +18,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Table and JSON output (`schema_version: 1`) and exit codes 0/1/2/3 with `--fail-on`.
 - Read-only guard: only `GetJobs` and `GetJobRuns` can be called on Glue; user-defined job
   arguments never enter a report.
+- Release workflow: publishing is blocked unless the tag matches the package version and lint
+  and tests pass.
