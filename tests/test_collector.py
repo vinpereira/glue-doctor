@@ -128,12 +128,40 @@ def test_job_without_runs_has_empty_tuple(glue):
     assert snap.runs == ()
 
 
-def test_collection_stops_once_enough_relevant_runs(glue):
+def test_collection_stops_once_enough_succeeded_runs(glue):
     client, stubber = glue
     stubber.add_response("get_jobs", {"Jobs": [raw_job("a")]})
     page = {"JobRuns": [raw_run(), raw_run(), raw_run()], "NextToken": "more"}
     stubber.add_response("get_job_runs", page)  # no second page is queued
     [snap] = collect_snapshots(client, everything, 2)
+    assert len(snap.runs) == 3
+    assert snap.collect_issues == ()
+
+
+def test_collection_keeps_paging_when_timeouts_crowd_out_successes(glue):
+    # timeout-too-generous needs `wanted` SUCCEEDED runs; TIMEOUT runs must not end the paging
+    client, stubber = glue
+    stubber.add_response("get_jobs", {"Jobs": [raw_job("a")]})
+    first = {
+        "JobRuns": [raw_run("TIMEOUT"), raw_run("TIMEOUT"), raw_run("SUCCEEDED")],
+        "NextToken": "more",
+    }
+    stubber.add_response("get_job_runs", first)
+    stubber.add_response("get_job_runs", {"JobRuns": [raw_run(), raw_run()]})
+    [snap] = collect_snapshots(client, everything, 3)
+    assert [r.state for r in snap.runs].count("SUCCEEDED") == 3
+    assert snap.collect_issues == ()
+
+
+def test_collection_reads_every_page_when_runs_never_succeed(glue):
+    client, stubber = glue
+    stubber.add_response("get_jobs", {"Jobs": [raw_job("a")]})
+    stubber.add_response(
+        "get_job_runs",
+        {"JobRuns": [raw_run("FAILED"), raw_run("FAILED")], "NextToken": "more"},
+    )
+    stubber.add_response("get_job_runs", {"JobRuns": [raw_run("FAILED")]})
+    [snap] = collect_snapshots(client, everything, 5)
     assert len(snap.runs) == 3
     assert snap.collect_issues == ()
 

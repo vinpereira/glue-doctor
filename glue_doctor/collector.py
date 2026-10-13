@@ -30,7 +30,6 @@ SPECIAL_ARGS_ALLOWLIST = frozenset(
 )
 
 MAX_WORKERS = 8
-_RELEVANT_STATES = frozenset({"SUCCEEDED", "TIMEOUT"})
 _BOTO_CONFIG = BotoConfig(
     retries={"mode": "adaptive", "max_attempts": 10},
     user_agent_extra=f"glue-doctor/{__version__}",
@@ -124,17 +123,22 @@ def _fetch_jobs(client: Any) -> Iterator[dict[str, Any]]:
 
 
 def _fetch_runs(client: Any, job_name: str, wanted: int) -> tuple[RunSample, ...]:
-    """Newest-first runs; stops once `wanted` SUCCEEDED/TIMEOUT runs have been seen."""
+    """Newest-first runs; stops once `wanted` SUCCEEDED runs have been seen.
+
+    Counting only SUCCEEDED runs is enough for every check: each of them needs at most `wanted`
+    runs in SUCCEEDED (and, for the tight-timeout check, TIMEOUT) state, and a SUCCEEDED run also
+    counts as one of those. TIMEOUT runs alone must not end the paging.
+    """
     runs: list[RunSample] = []
-    relevant = 0
+    succeeded = 0
     paginator = client.get_paginator("get_job_runs")
     for page in paginator.paginate(JobName=job_name, PaginationConfig={"PageSize": 200}):
         for raw in page["JobRuns"]:
             run = _to_run(raw)
             runs.append(run)
-            if run.state in _RELEVANT_STATES:
-                relevant += 1
-        if relevant >= wanted:
+            if run.state == "SUCCEEDED":
+                succeeded += 1
+        if succeeded >= wanted:
             break
     return tuple(runs)
 
