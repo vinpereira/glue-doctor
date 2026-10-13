@@ -1,4 +1,8 @@
 import json
+import os
+import re
+import subprocess
+import sys
 from importlib import resources
 
 import jsonschema
@@ -126,3 +130,57 @@ def test_table_mentions_suppressed_count(monkeypatch, capsys):
     res = result([finding()], [SuppressedFinding(finding(job="legacy"), "known gap")])
     render_table(build_report(res, region="eu-central-1", account_id=None, exit_code=1))
     assert "1 suppressed" in capsys.readouterr().out
+
+
+# --- colors on a real terminal ---------------------------------------------
+# Rich only styles output when stdout is a terminal, so these run the renderer in a subprocess
+# attached to a pseudo-terminal. NO_COLOR removes colors but keeps bold/dim, per the NO_COLOR spec.
+
+_RENDER_SNIPPET = """
+from glue_doctor.models import Finding, Severity
+from glue_doctor.report import build_report, render_table
+from glue_doctor.runner import AuditResult
+
+finding = Finding("timeout-too-generous", Severity.WARNING, "example-job", "message", "fix", {})
+result = AuditResult((finding,), (), 1, ())
+render_table(build_report(result, region="eu-central-1", account_id=None, exit_code=1))
+"""
+
+_COLOR_CODE = re.compile(r"\x1b\[(?:[0-9;]*;)?(?:3[0-7]|9[0-7]|38|4[0-7]|10[0-7])(?:;[0-9;]*)?m")
+
+
+def _render_on_a_terminal(extra_env):
+    import pty  # Unix only, so imported lazily to keep the module importable on Windows
+
+    master, slave = pty.openpty()
+    env = {k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "FORCE_COLOR")}
+    env.update({"COLUMNS": "120", **extra_env})
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _RENDER_SNIPPET], stdout=slave, stderr=slave, env=env
+    )
+    os.close(slave)
+    chunks = []
+    while True:
+        try:
+            data = os.read(master, 4096)
+        except OSError:  # the child closed its end of the terminal
+            break
+        if not data:
+            break
+        chunks.append(data)
+    proc.wait()
+    os.close(master)
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
+def test_table_is_colored_on_a_terminal():
+    # control for the NO_COLOR test below: proves the check can detect color codes at all
+    assert _COLOR_CODE.search(_render_on_a_terminal({}))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
+def test_table_has_no_color_codes_when_no_color_is_set():
+    output = _render_on_a_terminal({"NO_COLOR": "1"})
+    assert "timeout-too-generous" in output
+    assert not _COLOR_CODE.search(output)
