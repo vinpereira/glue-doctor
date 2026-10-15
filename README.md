@@ -6,8 +6,8 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/glue-doctor)](https://pypi.org/project/glue-doctor/)
 [![License](https://img.shields.io/pypi/l/glue-doctor)](https://github.com/vinpereira/glue-doctor/blob/main/LICENSE)
 
-Audit CLI for AWS Glue jobs. It reads job definitions and run history (read-only), reports
-configuration risks, and exits non-zero so it can gate CI.
+Audit CLI for AWS Glue jobs. It reads job definitions, run history and the S3 lifecycle rules of
+Spark UI event logs (read-only), reports configuration risks, and exits non-zero so it can gate CI.
 
 ## Install
 
@@ -53,10 +53,24 @@ Example output:
 | `timeout-too-tight` | warning | Recent runs take most of the timeout (p95 above 80% of it) |
 | `glue-version` | warning below 5.0, info below 5.1 | Glue version older than the configured minimum. Glue 5.1 and 6.0 are supported |
 | `observability-off` | info | `--enable-metrics` absent, job run insights explicitly disabled, or continuous logging off (only checked on Glue 4.0 and earlier; from 5.0 every job has real-time logging) |
+| `spark-ui-no-lifecycle` | warning | Spark UI event logs in S3 that no enabled, expiring lifecycle rule covers, so they grow without bound. Rules narrower than the logs location and rules filtered by tag or size do not count |
 | `collect-error` | warning | A job's data could not be read, so the audit of that job is incomplete |
 
-Streaming jobs are skipped by the timeout checks; Python shell jobs are skipped by the version and
-observability checks. `glue-doctor audit --help` lists every check.
+Streaming jobs are skipped by the timeout checks; Python shell jobs are skipped by the version,
+observability and Spark UI checks. `glue-doctor audit --help` lists every check.
+
+Known limits of `spark-ui-no-lifecycle`:
+
+- A rule counts as expiring when it has an `Expiration` by days or date. On a bucket with
+  versioning enabled that only adds delete markers: the data stays as noncurrent versions unless
+  the rule also sets `NoncurrentVersionExpiration`, which the check does not inspect (it would need
+  `s3:GetBucketVersioning`).
+- An `Expiration` date far in the future still counts as expiring.
+- A bucket in another region is followed through S3's redirect. If the region cannot be resolved
+  without an extra `HeadBucket` call (which the tool never makes), that bucket is reported as a
+  `collect-error` with the code `BucketRegionUnresolved`, and the rest of the audit goes on.
+- Reports contain the event-log location of each job (bucket and prefix). Glue's default event-log
+  bucket name includes the account ID, so do not paste unredacted reports in public places.
 
 ## Exit codes
 
@@ -112,20 +126,37 @@ the flag nor the file sets it.
 
 ## Permissions
 
-`glue-doctor` only calls `glue:GetJobs` and `glue:GetJobRuns` (plus `sts:GetCallerIdentity`, which
-needs no permission). A minimal policy:
+`glue-doctor` calls `glue:GetJobs`, `glue:GetJobRuns` and `s3:GetLifecycleConfiguration` (plus
+`sts:GetCallerIdentity`, which needs no permission). The S3 call reads the lifecycle configuration
+of each bucket that holds Spark UI event logs; the tool never lists or reads objects. A minimal
+policy:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": ["glue:GetJobs", "glue:GetJobRuns"], "Resource": "*" }
+    { "Effect": "Allow", "Action": ["glue:GetJobs", "glue:GetJobRuns"], "Resource": "*" },
+    {
+      "Effect": "Allow",
+      "Action": "s3:GetLifecycleConfiguration",
+      "Resource": "arn:aws:s3:::example-event-logs-bucket"
+    }
   ]
 }
 ```
 
-Any other AWS operation is blocked inside the tool. Only Glue's own special job arguments are read
-from a job definition; your custom arguments (which can hold secrets) never enter a report.
+If you do not want to grant the S3 permission, disable the check; no S3 call is then made:
+
+```toml
+[checks.spark-ui-no-lifecycle]
+enabled = false
+```
+
+Without the permission and with the check enabled, every job with Spark UI enabled is reported as a
+`collect-error`, because a failed read must never look like a clean audit. S3 directory buckets
+are not supported and are reported the same way. Any other AWS operation is blocked inside the
+tool. Only Glue's own special job arguments are read from a job definition; your custom arguments
+(which can hold secrets) never enter a report.
 
 ## JSON output
 

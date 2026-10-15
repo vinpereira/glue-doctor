@@ -29,7 +29,7 @@ def _checks_epilog() -> str:
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="glue-doctor")
 def cli() -> None:
-    """Audit AWS Glue jobs: timeouts, Glue versions and observability settings."""
+    """Audit AWS Glue jobs: timeouts, Glue versions, observability and event-log retention."""
 
 
 @cli.command(epilog=_checks_epilog())

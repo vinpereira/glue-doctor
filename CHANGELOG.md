@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
+### Added
+
+- `spark-ui-no-lifecycle` check: reports Glue jobs whose Spark UI event logs in S3 are not covered
+  by an enabled lifecycle rule that expires objects, so they grow without bound. A bucket whose
+  region cannot be resolved is reported as a `collect-error` (`BucketRegionUnresolved`) instead of
+  failing the audit.
+
+### Changed
+
+- The check needs the new IAM permission `s3:GetLifecycleConfiguration` on the event-log buckets.
+  After upgrading without it, each job with Spark UI enabled is reported as a `collect-error`
+  (exit code 1 by default). Grant the permission, or set
+  `[checks.spark-ui-no-lifecycle] enabled = false`; with the check disabled no S3 call is made.
+- The `collect-error` remediation now names the missing S3 permission and the way to disable the
+  check when the denied operation is the lifecycle read.
+
 ## [0.1.1] - 2026-10-13
 
 ### Fixed
