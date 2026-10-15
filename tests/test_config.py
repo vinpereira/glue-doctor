@@ -9,6 +9,7 @@ from glue_doctor.config import (
     default_config,
     discover_config_path,
     load_config,
+    needs_event_log_lifecycle,
     parse_config,
     runs_needed,
 )
@@ -174,3 +175,19 @@ def test_runs_needed():
         "[checks.timeout-too-tight]\nenabled = false"
     )
     assert runs_needed(off) == 0
+
+
+def test_needs_event_log_lifecycle():
+    assert needs_event_log_lifecycle(default_config()) is True
+    off = parse("[checks.spark-ui-no-lifecycle]\nenabled = false")
+    assert needs_event_log_lifecycle(off) is False
+
+
+def test_spark_ui_check_takes_no_parameters():
+    with pytest.raises(ConfigError, match="max_days"):
+        parse("[checks.spark-ui-no-lifecycle]\nmax_days = 30")
+
+
+def test_spark_ui_check_severity_can_be_overridden():
+    cfg = parse('[checks.spark-ui-no-lifecycle]\nseverity = "info"')
+    assert cfg.checks["spark-ui-no-lifecycle"].severity is Severity.INFO

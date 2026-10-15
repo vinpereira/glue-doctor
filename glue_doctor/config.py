@@ -234,3 +234,11 @@ def runs_needed(config: Config) -> int:
         if settings.enabled and REGISTRY[check_id].needs_runs
     ]
     return max(wanted, default=0)
+
+
+def needs_event_log_lifecycle(config: Config) -> bool:
+    """Whether the collector must read S3 lifecycle configurations (an enabled check needs them)."""
+    return any(
+        settings.enabled and REGISTRY[check_id].needs_event_log_lifecycle
+        for check_id, settings in config.checks.items()
+    )

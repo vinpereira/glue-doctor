@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from glue_doctor import cli as cli_module
 from glue_doctor.cli import cli
 from glue_doctor.collector import AuditAborted, AwsContext, ReadOnlyViolation
-from glue_doctor.models import CollectIssue
+from glue_doctor.models import CollectIssue, EventLogs, LifecycleRule
 from tests.factories import make_job
 
 
@@ -20,10 +20,12 @@ def fake_aws(monkeypatch):
 
         def fake_connect(profile, region):
             seen["profile"], seen["region"] = profile, region
-            return AwsContext(client=object(), region="eu-central-1", account_id="123456789012")
+            return AwsContext(
+                client=object(), region="eu-central-1", account_id="123456789012", s3="s3-client"
+            )
 
-        def fake_collect(client, job_filter, wanted_runs):
-            seen["filter"], seen["wanted"] = job_filter, wanted_runs
+        def fake_collect(client, job_filter, wanted_runs, s3_client=None):
+            seen["filter"], seen["wanted"], seen["s3_client"] = job_filter, wanted_runs, s3_client
             return snapshots
 
         monkeypatch.setattr(cli_module, "connect", fake_connect)
@@ -104,7 +106,7 @@ def test_audit_aborted_exits_three(monkeypatch):
 def test_unexpected_error_exits_three_without_leaking_details(fake_aws, monkeypatch):
     fake_aws([])
 
-    def boom(client, job_filter, wanted_runs):
+    def boom(client, job_filter, wanted_runs, s3_client=None):
         raise RuntimeError("secret-looking detail")
 
     monkeypatch.setattr(cli_module, "collect_snapshots", boom)
@@ -118,7 +120,7 @@ def test_unexpected_error_exits_three_without_leaking_details(fake_aws, monkeypa
 def test_read_only_violation_is_an_internal_error_not_a_finding(fake_aws, monkeypatch):
     fake_aws([])
 
-    def blocked(client, job_filter, wanted_runs):
+    def blocked(client, job_filter, wanted_runs, s3_client=None):
         raise ReadOnlyViolation("operation UpdateJob is not allowed")
 
     monkeypatch.setattr(cli_module, "collect_snapshots", blocked)
@@ -210,6 +212,7 @@ def test_help_lists_every_check_without_credentials():
         "timeout-too-tight",
         "glue-version",
         "observability-off",
+        "spark-ui-no-lifecycle",
         "collect-error",
     ):
         assert check_id in result.stdout
@@ -233,3 +236,50 @@ def test_json_format_never_imports_rich():
         """
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def spark_job(rules, issues=()):
+    logs = EventLogs("example-logs", "spark-ui/", rules)
+    return make_job(runs=(), event_logs=logs, collect_issues=issues)
+
+
+def test_uncovered_event_logs_is_a_finding(fake_aws):
+    fake_aws([spark_job(())])
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    [finding] = json.loads(result.stdout)["findings"]
+    assert finding["check_id"] == "spark-ui-no-lifecycle"
+    assert finding["evidence"]["bucket"] == "example-logs"
+
+
+def test_covered_event_logs_is_clean(fake_aws):
+    fake_aws([spark_job((LifecycleRule(True, "", True, False),))])
+    assert audit().exit_code == 0
+
+
+def test_no_s3_permission_at_all_gives_a_collect_error_per_job(fake_aws):
+    denial = (CollectIssue("GetBucketLifecycleConfiguration", "AccessDenied"),)
+    jobs = [
+        make_job(
+            name=f"example-job-{n}",
+            runs=(),
+            event_logs=EventLogs("example-logs", "spark-ui/", None),
+            collect_issues=denial,
+        )
+        for n in (1, 2)
+    ]
+    fake_aws(jobs)
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    findings = json.loads(result.stdout)["findings"]
+    assert [f["check_id"] for f in findings] == ["collect-error", "collect-error"]
+    assert all("s3:GetLifecycleConfiguration" in f["remediation"] for f in findings)
+
+
+def test_s3_client_is_only_passed_when_the_check_is_enabled(fake_aws, tmp_path):
+    seen = fake_aws([])
+    audit()
+    assert seen["s3_client"] == "s3-client"
+    (tmp_path / "glue-doctor.toml").write_text("[checks.spark-ui-no-lifecycle]\nenabled = false\n")
+    audit()
+    assert seen["s3_client"] is None

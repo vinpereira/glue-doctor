@@ -162,6 +162,19 @@ def test_collect_error_clean_job():
     assert check_collect_error(make_job(), NoParams()) == []
 
 
+def test_collect_error_tells_how_to_fix_an_s3_denial():
+    issue = CollectIssue("GetBucketLifecycleConfiguration", "AccessDenied")
+    [finding] = check_collect_error(make_job(collect_issues=(issue,)), NoParams())
+    assert "s3:GetLifecycleConfiguration" in finding.remediation
+    assert "spark-ui-no-lifecycle" in finding.remediation
+
+
+def test_collect_error_keeps_the_generic_hint_for_other_operations():
+    issue = CollectIssue("GetJobRuns", "AccessDeniedException")
+    [finding] = check_collect_error(make_job(collect_issues=(issue,)), NoParams())
+    assert "Grant the missing read permission" in finding.remediation
+
+
 # --- registry -------------------------------------------------------------
 
 
@@ -171,9 +184,13 @@ def test_registry_order_and_contents():
         "timeout-too-tight",
         "glue-version",
         "observability-off",
+        "spark-ui-no-lifecycle",
         "collect-error",
     ]
     assert {s.id for s in REGISTRY.values() if s.needs_runs} == {
         "timeout-too-generous",
         "timeout-too-tight",
+    }
+    assert {s.id for s in REGISTRY.values() if s.needs_event_log_lifecycle} == {
+        "spark-ui-no-lifecycle"
     }

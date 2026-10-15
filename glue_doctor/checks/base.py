@@ -11,7 +11,9 @@ class CheckSpec:
 
     `params_cls` is a dataclass whose fields are the check's TOML parameters; it validates
     itself in `__post_init__` (raising ValueError). Checks with `needs_runs=True` must expose a
-    `history` field, used to decide how many runs the collector fetches.
+    `history` field, used to decide how many runs the collector fetches. Checks with
+    `needs_event_log_lifecycle=True` make the collector read the S3 lifecycle configuration
+    of each Spark UI event-log bucket.
     """
 
     id: str
@@ -20,3 +22,4 @@ class CheckSpec:
     params_cls: type
     run: Callable[[JobSnapshot, Any], list[Finding]]
     needs_runs: bool = False
+    needs_event_log_lifecycle: bool = False

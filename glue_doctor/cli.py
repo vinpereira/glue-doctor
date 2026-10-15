@@ -12,6 +12,7 @@ from glue_doctor.config import (
     ConfigError,
     discover_config_path,
     load_config,
+    needs_event_log_lifecycle,
     runs_needed,
 )
 from glue_doctor.report import build_report, render_json, render_table
@@ -91,7 +92,12 @@ def _run_audit(config_path, region, profile, fmt, fail_on, jobs) -> int:
     )
     try:
         aws = connect(config.profile, config.region)
-        snapshots = collect_snapshots(aws.client, config.job_selected, runs_needed(config))
+        snapshots = collect_snapshots(
+            aws.client,
+            config.job_selected,
+            runs_needed(config),
+            s3_client=aws.s3 if needs_event_log_lifecycle(config) else None,
+        )
     except AuditAborted as exc:
         click.echo(f"Error: {exc}", err=True)
         return 3
