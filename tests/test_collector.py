@@ -258,3 +258,15 @@ def test_connect_rejects_a_malformed_region(no_aws_config):
 def test_connect_reports_unknown_profile(no_aws_config):
     with pytest.raises(AuditAborted, match="ProfileNotFound"):
         connect("does-not-exist", "eu-central-1")
+
+
+def test_connect_builds_guarded_glue_and_s3_clients(no_aws_config, monkeypatch):
+    for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    aws = connect(None, "eu-central-1")
+    assert aws.region == "eu-central-1"
+    with pytest.raises(ReadOnlyViolation, match="UpdateJob"):
+        aws.client.update_job(JobName="example-job", JobUpdate={})
+    with pytest.raises(ReadOnlyViolation, match="DeleteBucketLifecycle"):
+        aws.s3.delete_bucket_lifecycle(Bucket="example-logs")

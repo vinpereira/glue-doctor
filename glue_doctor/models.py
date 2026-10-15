@@ -34,6 +34,29 @@ class CollectIssue:
 
 
 @dataclass(frozen=True)
+class LifecycleRule:
+    """One S3 lifecycle rule, reduced to what matters for expiring Spark UI event logs."""
+
+    enabled: bool
+    prefix: str  # empty means the whole bucket
+    expires: bool  # removes current objects (Expiration with Days or Date)
+    scoped: bool  # filtered by tag or object size, so it reaches only part of the objects
+
+
+@dataclass(frozen=True)
+class EventLogs:
+    """Where a job writes its Spark UI event logs and which lifecycle rules apply there.
+
+    `rules` is None when the bucket could not be read (the job also has a CollectIssue) and an
+    empty tuple when the bucket has no lifecycle configuration.
+    """
+
+    bucket: str
+    prefix: str  # empty for the bucket root, otherwise ends with "/"
+    rules: tuple[LifecycleRule, ...] | None
+
+
+@dataclass(frozen=True)
 class JobSnapshot:
     name: str
     command: str
@@ -43,6 +66,7 @@ class JobSnapshot:
     special_args: dict[str, str]
     runs: tuple[RunSample, ...] | None = None
     collect_issues: tuple[CollectIssue, ...] = ()
+    event_logs: EventLogs | None = None
 
 
 @dataclass(frozen=True)

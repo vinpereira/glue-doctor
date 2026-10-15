@@ -10,10 +10,18 @@ from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
 from glue_doctor import __version__
-from glue_doctor.models import CollectIssue, JobSnapshot, RunSample
+from glue_doctor.models import (
+    SPARK_COMMANDS,
+    CollectIssue,
+    EventLogs,
+    JobSnapshot,
+    LifecycleRule,
+    RunSample,
+)
 from glue_doctor.versions import parse_glue_version, resolve_timeout
 
 ALLOWED_OPERATIONS = frozenset({"GetJobs", "GetJobRuns"})
+S3_ALLOWED_OPERATIONS = frozenset({"GetBucketLifecycleConfiguration"})
 
 # Glue-defined special arguments. User-defined arguments never enter a snapshot, so they cannot
 # reach findings, evidence or logs.
@@ -49,6 +57,7 @@ class AwsContext:
     client: Any
     region: str
     account_id: str | None
+    s3: Any = None
 
 
 def _describe(exc: Exception) -> str:
@@ -65,12 +74,14 @@ def _issue(operation: str, exc: Exception) -> CollectIssue:
     return CollectIssue(operation, type(exc).__name__)
 
 
-def install_read_only_guard(client: Any) -> None:
+def install_read_only_guard(
+    client: Any, service: str = "glue", allowed: frozenset[str] = ALLOWED_OPERATIONS
+) -> None:
     def _guard(params: Any, model: Any, **kwargs: Any) -> None:
-        if model.name not in ALLOWED_OPERATIONS:
+        if model.name not in allowed:
             raise ReadOnlyViolation(f"operation {model.name} is not allowed")
 
-    client.meta.events.register("before-parameter-build.glue.*", _guard)
+    client.meta.events.register(f"before-parameter-build.{service}.*", _guard)
 
 
 def account_id_of(sts_client: Any) -> str | None:
@@ -88,10 +99,12 @@ def connect(profile: str | None, region: str | None) -> AwsContext:
             raise AuditAborted("no AWS region configured; pass --region or set AWS_DEFAULT_REGION")
         glue = session.client("glue", config=_BOTO_CONFIG)
         install_read_only_guard(glue)
+        s3 = session.client("s3", config=_BOTO_CONFIG)
+        install_read_only_guard(s3, service="s3", allowed=S3_ALLOWED_OPERATIONS)
         account_id = account_id_of(session.client("sts"))
     except (BotoCoreError, ValueError) as exc:  # e.g. ProfileNotFound or an invalid endpoint
         raise AuditAborted(_describe(exc)) from exc
-    return AwsContext(client=glue, region=region_name, account_id=account_id)
+    return AwsContext(client=glue, region=region_name, account_id=account_id, s3=s3)
 
 
 def build_snapshot(raw: dict[str, Any]) -> JobSnapshot:
@@ -153,12 +166,100 @@ def _collect_one(client: Any, raw: dict[str, Any], wanted_runs: int) -> JobSnaps
         return replace(snapshot, collect_issues=(_issue("GetJobRuns", exc),))
 
 
+def event_log_target(job: JobSnapshot) -> tuple[str, str] | None:
+    """The (bucket, prefix) where a Spark job writes its UI event logs, if it does.
+
+    The prefix is empty for the bucket root and otherwise ends with "/", because Glue writes the
+    files inside that location.
+    """
+    if job.command not in SPARK_COMMANDS:
+        return None
+    if job.special_args.get("--enable-spark-ui", "").strip().lower() != "true":
+        return None
+    path = job.special_args.get("--spark-event-logs-path", "").strip()
+    if not path.startswith("s3://"):
+        return None
+    bucket, _, prefix = path[len("s3://") :].partition("/")
+    if not bucket:
+        return None
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    return bucket, prefix
+
+
+def parse_lifecycle_rules(raw_rules: list[dict[str, Any]]) -> tuple[LifecycleRule, ...]:
+    """Reduce S3 lifecycle rules to the facts needed to decide whether logs are expired."""
+    parsed = []
+    for raw in raw_rules:
+        flt = raw.get("Filter") or {}
+        both = flt.get("And") or {}
+        expiration = raw.get("Expiration") or {}
+        parsed.append(
+            LifecycleRule(
+                enabled=raw.get("Status") == "Enabled",
+                prefix=flt.get("Prefix") or both.get("Prefix") or raw.get("Prefix") or "",
+                expires=expiration.get("Days") is not None or expiration.get("Date") is not None,
+                scoped=any(k in flt for k in ("Tag", "ObjectSizeGreaterThan", "ObjectSizeLessThan"))
+                or any(k in both for k in ("Tags", "ObjectSizeGreaterThan", "ObjectSizeLessThan")),
+            )
+        )
+    return tuple(parsed)
+
+
+def _fetch_lifecycle(s3_client: Any, bucket: str) -> tuple[LifecycleRule, ...] | CollectIssue:
+    operation = "GetBucketLifecycleConfiguration"
+    try:
+        response = s3_client.get_bucket_lifecycle_configuration(Bucket=bucket)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "NoSuchLifecycleConfiguration":
+            return ()
+        return _issue(operation, exc)
+    except BotoCoreError as exc:
+        return _issue(operation, exc)
+    return parse_lifecycle_rules(response.get("Rules", []))
+
+
+def _attach_event_logs(snapshots: list[JobSnapshot], s3_client: Any) -> list[JobSnapshot]:
+    targets = {snapshot.name: event_log_target(snapshot) for snapshot in snapshots}
+    buckets = sorted({target[0] for target in targets.values() if target})
+    if not buckets:
+        return snapshots
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        fetched = pool.map(lambda bucket: _fetch_lifecycle(s3_client, bucket), buckets)
+        results = dict(zip(buckets, fetched, strict=True))
+    attached = []
+    for snapshot in snapshots:
+        target = targets[snapshot.name]
+        if target is None:
+            attached.append(snapshot)
+            continue
+        bucket, prefix = target
+        result = results[bucket]
+        if isinstance(result, CollectIssue):
+            attached.append(
+                replace(
+                    snapshot,
+                    event_logs=EventLogs(bucket, prefix, None),
+                    collect_issues=(*snapshot.collect_issues, result),
+                )
+            )
+        else:
+            attached.append(replace(snapshot, event_logs=EventLogs(bucket, prefix, result)))
+    return attached
+
+
 def collect_snapshots(
-    client: Any, job_filter: Callable[[str], bool], wanted_runs: int
+    client: Any,
+    job_filter: Callable[[str], bool],
+    wanted_runs: int,
+    s3_client: Any = None,
 ) -> list[JobSnapshot]:
     try:
         raw_jobs = [job for job in _fetch_jobs(client) if job_filter(job["Name"])]
     except (BotoCoreError, ClientError) as exc:
         raise AuditAborted(_describe(exc)) from exc
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        return list(pool.map(lambda raw: _collect_one(client, raw, wanted_runs), raw_jobs))
+        snapshots = list(pool.map(lambda raw: _collect_one(client, raw, wanted_runs), raw_jobs))
+    if s3_client is not None:
+        snapshots = _attach_event_logs(snapshots, s3_client)
+    return snapshots

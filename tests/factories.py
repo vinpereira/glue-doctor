@@ -1,4 +1,4 @@
-from glue_doctor.models import CollectIssue, JobSnapshot, RunSample
+from glue_doctor.models import CollectIssue, EventLogs, JobSnapshot, RunSample
 
 OBSERVABLE_ARGS = {
     "--enable-job-insights": "true",
@@ -22,6 +22,7 @@ def make_job(
     special_args: dict[str, str] | None = None,
     runs: list[RunSample] | tuple[RunSample, ...] | None = None,
     collect_issues: tuple[CollectIssue, ...] = (),
+    event_logs: EventLogs | None = None,
 ) -> JobSnapshot:
     return JobSnapshot(
         name=name,
@@ -32,4 +33,5 @@ def make_job(
         special_args=dict(OBSERVABLE_ARGS) if special_args is None else special_args,
         runs=None if runs is None else tuple(runs),
         collect_issues=collect_issues,
+        event_logs=event_logs,
     )
