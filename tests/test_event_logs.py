@@ -2,11 +2,14 @@ from datetime import datetime
 
 import boto3
 import pytest
+from botocore.awsrequest import AWSResponse
 from botocore.stub import Stubber
 
 from glue_doctor import collector
 from glue_doctor.collector import (
     S3_ALLOWED_OPERATIONS,
+    ReadOnlyViolation,
+    _fetch_lifecycle,
     collect_snapshots,
     event_log_target,
     install_read_only_guard,
@@ -295,3 +298,69 @@ def test_without_an_s3_client_nothing_is_collected(clients):
     glue_stub.add_response("get_jobs", {"Jobs": [raw_job("a", "s3://example-logs/spark-ui/")]})
     [snap] = collect_snapshots(glue, everything, 0)  # s3_client defaults to None
     assert snap.event_logs is None and snap.collect_issues == ()
+
+
+# --- a bucket in another region -----------------------------------------------------------------
+# When S3 answers with a redirect that does not name the bucket's region, botocore's region
+# redirector calls HeadBucket to find it. The read-only guard blocks that call, which must never
+# take the whole audit down. Stubber cannot reproduce this (it answers before the redirector runs),
+# so the HTTP response is faked one level lower, in the `before-send` event.
+
+
+class _Body:
+    def __init__(self, data):
+        self._data = data
+
+    def stream(self):
+        yield self._data
+
+
+_REDIRECT = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b"<Error><Code>PermanentRedirect</Code><Message>redirect</Message></Error>"
+)
+_LIFECYCLE = (
+    b'<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration><Rule><ID>expire</ID>'
+    b"<Filter><Prefix>ui/</Prefix></Filter><Status>Enabled</Status>"
+    b"<Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>"
+)
+
+
+def _redirect_for_example_logs(request, **kwargs):
+    """301 without any region information for example-logs; a normal answer for the rest."""
+    if "example-logs" in request.url:
+        return AWSResponse(request.url, 301, {"Content-Type": "application/xml"}, _Body(_REDIRECT))
+    return AWSResponse(request.url, 200, {"Content-Type": "application/xml"}, _Body(_LIFECYCLE))
+
+
+def test_redirect_without_a_region_is_a_collect_issue_not_a_crash():
+    keys = {"aws_access_key_id": "t", "aws_secret_access_key": "t"}
+    glue = boto3.client("glue", region_name="eu-central-1", **keys)
+    s3 = boto3.client("s3", region_name="eu-central-1", **keys)
+    install_read_only_guard(glue)
+    install_read_only_guard(s3, service="s3", allowed=S3_ALLOWED_OPERATIONS)
+    s3.meta.events.register(
+        "before-send.s3.GetBucketLifecycleConfiguration", _redirect_for_example_logs
+    )
+    jobs = [
+        raw_job("far", "s3://example-logs/spark-ui/"),
+        raw_job("near", "s3://other-logs/ui/"),
+    ]
+    with Stubber(glue) as glue_stub:
+        glue_stub.add_response("get_jobs", {"Jobs": jobs})
+        far, near = collect_snapshots(glue, everything, 0, s3_client=s3)
+    assert far.event_logs == EventLogs("example-logs", "spark-ui/", None)
+    assert far.collect_issues == (
+        CollectIssue("GetBucketLifecycleConfiguration", "BucketRegionUnresolved"),
+    )
+    assert near.collect_issues == ()
+    assert near.event_logs.rules == (LifecycleRule(True, "ui/", True, False),)
+
+
+def test_other_guard_violations_still_surface_as_bugs():
+    class Client:
+        def get_bucket_lifecycle_configuration(self, Bucket):
+            raise ReadOnlyViolation("operation PutBucketLifecycleConfiguration is not allowed")
+
+    with pytest.raises(ReadOnlyViolation, match="PutBucketLifecycleConfiguration"):
+        _fetch_lifecycle(Client(), "example-logs")

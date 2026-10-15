@@ -216,6 +216,14 @@ def _fetch_lifecycle(s3_client: Any, bucket: str) -> tuple[LifecycleRule, ...] |
         return _issue(operation, exc)
     except BotoCoreError as exc:
         return _issue(operation, exc)
+    except ReadOnlyViolation as exc:
+        # For a bucket in another region, botocore's redirector calls HeadBucket when the redirect
+        # does not name the region. The guard blocks it (the allowlist stays strict); that bucket
+        # is reported as unreadable instead of failing the whole audit. Any other violation is a
+        # bug and must surface.
+        if "HeadBucket" in str(exc):
+            return CollectIssue(operation, "BucketRegionUnresolved")
+        raise
     return parse_lifecycle_rules(response.get("Rules", []))
 
 
