@@ -6,8 +6,9 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/glue-doctor)](https://pypi.org/project/glue-doctor/)
 [![License](https://img.shields.io/pypi/l/glue-doctor)](https://github.com/vinpereira/glue-doctor/blob/main/LICENSE)
 
-Audit CLI for AWS Glue jobs. It reads job definitions, run history and the S3 lifecycle rules of
-Spark UI event logs (read-only), reports configuration risks, and exits non-zero so it can gate CI.
+Audit CLI for AWS Glue jobs. It reads job definitions, run history, the S3 lifecycle rules of
+Spark UI event logs and the Data Catalog's Iceberg table optimizers (read-only), reports
+configuration risks, and exits non-zero so it can gate CI.
 
 ## Install
 
@@ -31,7 +32,7 @@ Example output:
 
 ```text
 ┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Severity ┃ Job        ┃ Check                ┃ Message                                                             ┃
+┃ Severity ┃ Resource   ┃ Check                ┃ Message                                                             ┃
 ┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
 │ warning  │ etl-orders │ timeout-too-generous │ Timeout is 2880 min but the median successful run takes 12 min      │
 │          │            │                      │ (240x)                                                              │
@@ -42,7 +43,7 @@ Example output:
 │          │            │                      │ on by default) and costs less, so validate your job before          │
 │          │            │                      │ migrating                                                           │
 └──────────┴────────────┴──────────────────────┴─────────────────────────────────────────────────────────────────────┘
-2 finding(s) in 34 job(s)
+2 finding(s) in 34 job(s) and 78 table(s)
 ```
 
 ## Checks
@@ -54,7 +55,8 @@ Example output:
 | `glue-version` | warning below 5.0, info below 5.1 | Glue version older than the configured minimum. Glue 5.1 and 6.0 are supported |
 | `observability-off` | info | `--enable-metrics` absent, job run insights explicitly disabled, or continuous logging off (only checked on Glue 4.0 and earlier; from 5.0 every job has real-time logging) |
 | `spark-ui-no-lifecycle` | warning | Spark UI event logs in S3 that no enabled, expiring lifecycle rule covers, so they grow without bound. Rules narrower than the logs location and rules filtered by tag or size do not count |
-| `collect-error` | warning | A job's data could not be read, so the audit of that job is incomplete |
+| `iceberg-optimizer-suspended` | warning | An Iceberg table optimizer (compaction, snapshot retention, orphan file deletion) whose last runs keep failing, or a retention or orphan-file-deletion optimizer with no run for more than 7 days. It never claims the optimizer was suspended (the Glue API has no such state). Compaction is threshold driven, so "no run" is not reported for it |
+| `collect-error` | warning | A resource's data (a job, a table or the catalog) could not be read, so the audit of it is incomplete |
 
 Streaming jobs are skipped by the timeout checks; Python shell jobs are skipped by the version,
 observability and Spark UI checks. `glue-doctor audit --help` lists every check.
@@ -71,6 +73,14 @@ Known limits of `spark-ui-no-lifecycle`:
   `collect-error` with the code `BucketRegionUnresolved`, and the rest of the audit goes on.
 - Reports contain the event-log location of each job (bucket and prefix). Glue's default event-log
   bucket name includes the account ID, so do not paste unredacted reports in public places.
+
+Known limits of `iceberg-optimizer-suspended`:
+
+- The failure rule was designed from the documented API and tested with synthetic data; no real
+  failing optimizer has been observed yet.
+- Tables that Lake Formation hides from the role are not listed, so they are not audited.
+- Only optimizers configured on the table are read; an optimizer that is not configured is not an
+  error.
 
 ## Exit codes
 
@@ -95,6 +105,10 @@ profile = "my-profile"
 include = ["*"]
 exclude = ["scratch-*"]
 
+[catalog]
+include = ["*"]              # database globs scanned for Iceberg tables
+exclude = ["scratch_*"]
+
 [checks.timeout-too-generous]
 severity    = "warning"
 max_ratio   = 10.0           # timeout / median of successful runs
@@ -113,11 +127,15 @@ info_below = "5.1"
 [checks.observability-off]
 enabled = false
 
+[checks.iceberg-optimizer-suspended]
+min_failures = 2             # consecutive failed runs needed to report
+stale_days   = 7             # retention / orphan-file-deletion: days without a run
+
 [[suppress]]
-check  = "timeout-too-generous"
-job    = "nightly-*"
-reason = "Highly variable runtime"   # required
-until  = 2027-01-31                  # optional; after this date the finding returns
+check    = "timeout-too-generous"
+resource = "nightly-*"               # glob over the resource name: a job, or database.table
+reason   = "Highly variable runtime" # required
+until    = 2027-01-31                # optional; after this date the finding returns
 ```
 
 Any check accepts `enabled` and `severity` (`error`, `warning` or `info`); a severity override
@@ -126,16 +144,28 @@ the flag nor the file sets it.
 
 ## Permissions
 
-`glue-doctor` calls `glue:GetJobs`, `glue:GetJobRuns` and `s3:GetLifecycleConfiguration` (plus
-`sts:GetCallerIdentity`, which needs no permission). The S3 call reads the lifecycle configuration
-of each bucket that holds Spark UI event logs; the tool never lists or reads objects. A minimal
-policy:
+`glue-doctor` calls `glue:GetJobs`, `glue:GetJobRuns`, `glue:GetDatabases`, `glue:GetTables`,
+`glue:BatchGetTableOptimizer`, `glue:ListTableOptimizerRuns` and `s3:GetLifecycleConfiguration`
+(plus `sts:GetCallerIdentity`, which needs no permission). The S3 call reads the lifecycle
+configuration of each bucket that holds Spark UI event logs; the tool never lists or reads objects.
+A minimal policy:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": ["glue:GetJobs", "glue:GetJobRuns"], "Resource": "*" },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetJobs",
+        "glue:GetJobRuns",
+        "glue:GetDatabases",
+        "glue:GetTables",
+        "glue:BatchGetTableOptimizer",
+        "glue:ListTableOptimizerRuns"
+      ],
+      "Resource": "*"
+    },
     {
       "Effect": "Allow",
       "Action": "s3:GetLifecycleConfiguration",
@@ -152,6 +182,10 @@ If you do not want to grant the S3 permission, disable the check; no S3 call is 
 enabled = false
 ```
 
+To skip the catalog scan set `[checks.iceberg-optimizer-suspended] enabled = false`; no catalog call
+is then made. Without the four Glue permissions and with the check enabled, the catalog is reported
+as a `collect-error` (resource type `catalog`).
+
 Without the permission and with the check enabled, every job with Spark UI enabled is reported as a
 `collect-error`, because a failed read must never look like a clean audit. S3 directory buckets
 are not supported and are reported the same way. Any other AWS operation is blocked inside the
@@ -160,8 +194,10 @@ tool. Only Glue's own special job arguments are read from a job definition; your
 
 ## JSON output
 
-`--format json` prints a document validated by `glue_doctor/schemas/report-v1.json`
-(`schema_version: 1`) on stdout; warnings and errors go to stderr.
+`--format json` prints a document validated by `glue_doctor/schemas/report-v2.json`
+(`schema_version: 2`) on stdout; warnings and errors go to stderr. Findings carry `resource_type`
+(`job`, `table` or `catalog`) and `resource` (a job name, `database.table`, or `catalog` / a
+database name). Version 0.3.0 renamed the former `job` field to `resource`.
 
 ## Development
 

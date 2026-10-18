@@ -1,7 +1,7 @@
 [project]
 name = "glue-doctor"
 dynamic = ["version"]
-description = "Audit CLI for AWS Glue jobs: timeouts, Glue versions, observability and event-log retention"
+description = "Audit CLI for AWS Glue jobs: timeouts, Glue versions, observability, event-log retention and table optimizers"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
