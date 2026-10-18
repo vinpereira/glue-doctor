@@ -1,4 +1,11 @@
-from glue_doctor.models import CollectIssue, EventLogs, JobSnapshot, RunSample
+from glue_doctor.models import (
+    CollectIssue,
+    EventLogs,
+    JobSnapshot,
+    OptimizerRun,
+    OptimizerSnapshot,
+    RunSample,
+)
 
 OBSERVABLE_ARGS = {
     "--enable-job-insights": "true",
@@ -34,4 +41,33 @@ def make_job(
         runs=None if runs is None else tuple(runs),
         collect_issues=collect_issues,
         event_logs=event_logs,
+    )
+
+
+def make_optimizer(
+    optimizer_type: str = "retention",
+    database: str = "example_db",
+    table: str = "example_table",
+    enabled: bool = True,
+    last_event: str | None = "completed",
+    age_days: int | None = 1,
+    recent: tuple[str, ...] | None = None,
+    has_error: bool = False,
+    collect_issues: tuple[CollectIssue, ...] = (),
+) -> OptimizerSnapshot:
+    """`recent` lists event types newest first; `last_event=None` means the optimizer never ran."""
+    last_run = None
+    if last_event is not None:
+        last_run = OptimizerRun(last_event, None, age_days, has_error)
+    recent_runs = None
+    if recent is not None:
+        recent_runs = tuple(OptimizerRun(e, None, age_days, has_error) for e in recent)
+    return OptimizerSnapshot(
+        database=database,
+        table=table,
+        optimizer_type=optimizer_type,
+        enabled=enabled,
+        last_run=last_run,
+        recent_runs=recent_runs,
+        collect_issues=collect_issues,
     )

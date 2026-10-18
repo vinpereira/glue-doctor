@@ -199,3 +199,27 @@ def test_spark_ui_check_takes_no_parameters():
 def test_spark_ui_check_severity_can_be_overridden():
     cfg = parse('[checks.spark-ui-no-lifecycle]\nseverity = "info"')
     assert cfg.checks["spark-ui-no-lifecycle"].severity is Severity.INFO
+
+
+def test_catalog_defaults_and_selection():
+    cfg = default_config()
+    assert cfg.catalog_include == ("*",) and cfg.catalog_exclude == ()
+    cfg = parse('[catalog]\ninclude = ["prod_*"]\nexclude = ["prod_tmp*"]')
+    assert cfg.database_selected("prod_sales")
+    assert not cfg.database_selected("prod_tmp1")
+    assert not cfg.database_selected("dev_sales")
+
+
+@pytest.mark.parametrize(
+    "text, fragment",
+    [
+        ("[catalog]\nincl = []", "incl"),
+        ("[catalog]\ninclude = []", "catalog"),
+        ('[catalog]\ninclude = [""]', "catalog"),
+        ('[catalog]\nexclude = [" "]', "catalog"),
+        ('catalog = "x"', "catalog"),
+    ],
+)
+def test_invalid_catalog_section(text, fragment):
+    with pytest.raises(ConfigError, match=fragment):
+        parse(text)

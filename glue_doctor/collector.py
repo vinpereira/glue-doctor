@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -12,15 +13,28 @@ from botocore.exceptions import BotoCoreError, ClientError
 from glue_doctor import __version__
 from glue_doctor.models import (
     SPARK_COMMANDS,
+    CatalogScope,
+    CatalogSnapshot,
     CollectIssue,
     EventLogs,
     JobSnapshot,
     LifecycleRule,
+    OptimizerRun,
+    OptimizerSnapshot,
     RunSample,
 )
 from glue_doctor.versions import parse_glue_version, resolve_timeout
 
-ALLOWED_OPERATIONS = frozenset({"GetJobs", "GetJobRuns"})
+ALLOWED_OPERATIONS = frozenset(
+    {
+        "GetJobs",
+        "GetJobRuns",
+        "GetDatabases",
+        "GetTables",
+        "BatchGetTableOptimizer",
+        "ListTableOptimizerRuns",
+    }
+)
 S3_ALLOWED_OPERATIONS = frozenset({"GetBucketLifecycleConfiguration"})
 
 # Glue-defined special arguments. User-defined arguments never enter a snapshot, so they cannot
@@ -68,10 +82,12 @@ def _describe(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _issue(operation: str, exc: Exception) -> CollectIssue:
+def _issue(operation: str, exc: Exception, target: str | None = None) -> CollectIssue:
     if isinstance(exc, ClientError):
-        return CollectIssue(operation, exc.response.get("Error", {}).get("Code", "Unknown"))
-    return CollectIssue(operation, type(exc).__name__)
+        code = exc.response.get("Error", {}).get("Code", "Unknown")
+    else:
+        code = type(exc).__name__
+    return CollectIssue(operation, code, target)
 
 
 def install_read_only_guard(
@@ -213,16 +229,16 @@ def _fetch_lifecycle(s3_client: Any, bucket: str) -> tuple[LifecycleRule, ...] |
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "NoSuchLifecycleConfiguration":
             return ()
-        return _issue(operation, exc)
+        return _issue(operation, exc, bucket)
     except BotoCoreError as exc:
-        return _issue(operation, exc)
+        return _issue(operation, exc, bucket)
     except ReadOnlyViolation as exc:
         # For a bucket in another region, botocore's redirector calls HeadBucket when the redirect
         # does not name the region. The guard blocks it (the allowlist stays strict); that bucket
         # is reported as unreadable instead of failing the whole audit. Any other violation is a
         # bug and must surface.
         if "HeadBucket" in str(exc):
-            return CollectIssue(operation, "BucketRegionUnresolved")
+            return CollectIssue(operation, "BucketRegionUnresolved", bucket)
         raise
     return parse_lifecycle_rules(response.get("Rules", []))
 
@@ -271,3 +287,172 @@ def collect_snapshots(
     if s3_client is not None:
         snapshots = _attach_event_logs(snapshots, s3_client)
     return snapshots
+
+
+OPTIMIZER_TYPES = ("compaction", "retention", "orphan_file_deletion")
+BATCH_LIMIT = 20  # BatchGetTableOptimizer accepts at most 20 entries per call
+HISTORY_FLOOR = 10  # runs kept for a failing optimizer, so a streak can be reported up to this
+
+
+def _list_databases(client: Any) -> list[dict[str, Any]]:
+    return [
+        database
+        for page in client.get_paginator("get_databases").paginate()
+        for database in page["DatabaseList"]
+    ]
+
+
+def _iceberg_tables(
+    client: Any, database: dict[str, Any]
+) -> tuple[list[tuple[str, str, str | None]], CollectIssue | None]:
+    """The Iceberg tables of one database as (database, table, catalog id), or the read failure."""
+    name = database["Name"]
+    found: list[tuple[str, str, str | None]] = []
+    try:
+        for page in client.get_paginator("get_tables").paginate(DatabaseName=name):
+            for table in page["TableList"]:
+                if (table.get("Parameters") or {}).get("table_type", "").upper() == "ICEBERG":
+                    catalog_id = table.get("CatalogId") or database.get("CatalogId")
+                    found.append((name, table["Name"], catalog_id))
+    except (BotoCoreError, ClientError) as exc:
+        return [], _issue("GetTables", exc, name)
+    return found, None
+
+
+def _to_optimizer_run(raw: dict[str, Any], now: datetime) -> OptimizerRun:
+    ended = raw.get("endTimestamp") or raw.get("startTimestamp")
+    return OptimizerRun(
+        event_type=str(raw.get("eventType", "")).lower(),
+        ended_on=ended,
+        age_days=(now - ended).days if ended else None,
+        has_error=bool(raw.get("error")),
+    )
+
+
+def _batch_get(
+    client: Any, entries: list[dict[str, str]], now: datetime
+) -> tuple[list[OptimizerSnapshot], CollectIssue | None]:
+    """One BatchGetTableOptimizer call: the configured optimizers, or the whole-call failure."""
+    try:
+        response = client.batch_get_table_optimizer(Entries=entries)
+    except (BotoCoreError, ClientError) as exc:
+        return [], _issue("BatchGetTableOptimizer", exc, "catalog")
+    snapshots = []
+    for item in response.get("TableOptimizers", []):
+        optimizer = item.get("tableOptimizer") or {}
+        last = optimizer.get("lastRun")
+        snapshots.append(
+            OptimizerSnapshot(
+                database=item["databaseName"],
+                table=item["tableName"],
+                optimizer_type=optimizer.get("type", ""),
+                enabled=bool((optimizer.get("configuration") or {}).get("enabled")),
+                last_run=_to_optimizer_run(last, now) if last else None,
+            )
+        )
+    for failure in response.get("Failures", []):
+        code = (failure.get("error") or {}).get("ErrorCode", "Unknown")
+        if code == "EntityNotFoundException":
+            continue  # the optimizer is simply not configured for that table
+        snapshots.append(
+            OptimizerSnapshot(
+                database=failure["databaseName"],
+                table=failure["tableName"],
+                optimizer_type=failure.get("type", ""),
+                enabled=False,
+                last_run=None,
+                collect_issues=(
+                    CollectIssue(
+                        "BatchGetTableOptimizer",
+                        code,
+                        f"{failure['databaseName']}.{failure['tableName']}",
+                    ),
+                ),
+            )
+        )
+    return snapshots, None
+
+
+def _history(
+    client: Any, optimizer: OptimizerSnapshot, catalog_id: str | None, limit: int, now: datetime
+) -> OptimizerSnapshot:
+    """Read the run history of a failing optimizer; the API ordering is not trusted."""
+    try:
+        runs = [
+            run
+            for page in client.get_paginator("list_table_optimizer_runs").paginate(
+                CatalogId=catalog_id,
+                DatabaseName=optimizer.database,
+                TableName=optimizer.table,
+                Type=optimizer.optimizer_type,
+            )
+            for run in page["TableOptimizerRuns"]
+        ]
+    except (BotoCoreError, ClientError) as exc:
+        issue = _issue("ListTableOptimizerRuns", exc, optimizer.resource)
+        return replace(optimizer, collect_issues=(*optimizer.collect_issues, issue))
+    epoch = datetime.min.replace(tzinfo=UTC)
+    runs.sort(key=lambda r: r.get("startTimestamp") or epoch, reverse=True)
+    return replace(optimizer, recent_runs=tuple(_to_optimizer_run(r, now) for r in runs[:limit]))
+
+
+def _merge_scopes(issues: list[CollectIssue]) -> tuple[CatalogScope, ...]:
+    grouped: dict[str, list[CollectIssue]] = {}
+    for issue in issues:
+        bucket = grouped.setdefault(issue.target or "catalog", [])
+        if issue not in bucket:
+            bucket.append(issue)
+    return tuple(CatalogScope(resource, tuple(found)) for resource, found in grouped.items())
+
+
+def collect_catalog(
+    client: Any,
+    database_filter: Callable[[str], bool],
+    min_failures: int,
+    now: datetime | None = None,
+) -> CatalogSnapshot:
+    """Scan the Data Catalog for Iceberg tables and read their configured optimizers."""
+    now = now or datetime.now(UTC)
+    limit = max(min_failures, HISTORY_FLOOR)
+    issues: list[CollectIssue] = []
+    try:
+        databases = [d for d in _list_databases(client) if database_filter(d["Name"])]
+    except (BotoCoreError, ClientError) as exc:
+        return CatalogSnapshot((), _merge_scopes([_issue("GetDatabases", exc, "catalog")]), 0)
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        listed = list(pool.map(lambda db: _iceberg_tables(client, db), databases))
+        tables: list[tuple[str, str, str | None]] = []
+        for found, issue in listed:
+            tables.extend(found)
+            if issue is not None:
+                issues.append(issue)
+        catalog_ids = {(db, table): cid for db, table, cid in tables}
+        entries = [
+            {"catalogId": cid, "databaseName": db, "tableName": table, "type": kind}
+            for db, table, cid in tables
+            for kind in OPTIMIZER_TYPES
+        ]
+        chunks = [entries[i : i + BATCH_LIMIT] for i in range(0, len(entries), BATCH_LIMIT)]
+        optimizers: list[OptimizerSnapshot] = []
+        for found, call_issue in pool.map(lambda c: _batch_get(client, c, now), chunks):
+            optimizers.extend(found)
+            if call_issue is not None:
+                issues.append(call_issue)
+        suspects = [
+            o for o in optimizers if o.last_run is not None and o.last_run.event_type == "failed"
+        ]
+        refreshed = dict(
+            zip(
+                [id(o) for o in suspects],
+                pool.map(
+                    lambda o: _history(
+                        client, o, catalog_ids.get((o.database, o.table)), limit, now
+                    ),
+                    suspects,
+                ),
+                strict=True,
+            )
+        )
+    optimizers = [refreshed.get(id(o), o) for o in optimizers]
+    return CatalogSnapshot(tuple(optimizers), _merge_scopes(issues), len(tables))

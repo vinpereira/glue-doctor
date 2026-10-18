@@ -31,6 +31,7 @@ class RunSample:
 class CollectIssue:
     operation: str
     code: str
+    target: str | None = None  # the bucket, database or "database.table" where the read failed
 
 
 @dataclass(frozen=True)
@@ -78,3 +79,45 @@ class Finding:
     message: str
     remediation: str
     evidence: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OptimizerRun:
+    """One run of a table optimizer. `age_days` is computed at collection time."""
+
+    event_type: str  # lowercase: starting, in_progress, completed, failed
+    ended_on: datetime | None
+    age_days: int | None
+    has_error: bool
+
+
+@dataclass(frozen=True)
+class OptimizerSnapshot:
+    """A configured table optimizer. `recent_runs` (newest first) is only read for suspects."""
+
+    database: str
+    table: str
+    optimizer_type: str  # compaction, retention or orphan_file_deletion
+    enabled: bool
+    last_run: OptimizerRun | None
+    recent_runs: tuple[OptimizerRun, ...] | None = None
+    collect_issues: tuple[CollectIssue, ...] = ()
+
+    @property
+    def resource(self) -> str:
+        return f"{self.database}.{self.table}"
+
+
+@dataclass(frozen=True)
+class CatalogScope:
+    """A catalog-level read failure: `resource` is "catalog" or a database name."""
+
+    resource: str
+    collect_issues: tuple[CollectIssue, ...]
+
+
+@dataclass(frozen=True)
+class CatalogSnapshot:
+    optimizers: tuple[OptimizerSnapshot, ...]
+    scopes: tuple[CatalogScope, ...]
+    tables_audited: int

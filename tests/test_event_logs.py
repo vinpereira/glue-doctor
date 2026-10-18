@@ -288,7 +288,9 @@ def test_unreadable_bucket_becomes_a_collect_issue_for_its_jobs_only(clients, co
     )
     denied, fine = collect_snapshots(glue, everything, 0, s3_client=s3)
     assert denied.event_logs == EventLogs("example-logs", "spark-ui/", None)
-    assert denied.collect_issues == (CollectIssue("GetBucketLifecycleConfiguration", code),)
+    assert denied.collect_issues == (
+        CollectIssue("GetBucketLifecycleConfiguration", code, "example-logs"),
+    )
     assert fine.collect_issues == ()
     assert fine.event_logs.rules == (LifecycleRule(True, "ui/", True, False),)
 
@@ -351,7 +353,7 @@ def test_redirect_without_a_region_is_a_collect_issue_not_a_crash():
         far, near = collect_snapshots(glue, everything, 0, s3_client=s3)
     assert far.event_logs == EventLogs("example-logs", "spark-ui/", None)
     assert far.collect_issues == (
-        CollectIssue("GetBucketLifecycleConfiguration", "BucketRegionUnresolved"),
+        CollectIssue("GetBucketLifecycleConfiguration", "BucketRegionUnresolved", "example-logs"),
     )
     assert near.collect_issues == ()
     assert near.event_logs.rules == (LifecycleRule(True, "ui/", True, False),)

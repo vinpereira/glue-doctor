@@ -12,7 +12,7 @@ from glue_doctor.models import Severity
 FAIL_ON_CHOICES = ("error", "warning", "info", "never")
 DEFAULT_CONFIG_NAME = "glue-doctor.toml"
 
-_TOP_KEYS = {"fail_on", "region", "profile", "jobs", "checks", "suppress"}
+_TOP_KEYS = {"fail_on", "region", "profile", "jobs", "catalog", "checks", "suppress"}
 _SEVERITIES = [s.value for s in Severity]
 
 
@@ -42,12 +42,19 @@ class Config:
     profile: str | None = None
     include: tuple[str, ...] = ("*",)
     exclude: tuple[str, ...] = ()
+    catalog_include: tuple[str, ...] = ("*",)
+    catalog_exclude: tuple[str, ...] = ()
     checks: dict[str, CheckSettings] = field(default_factory=dict)
     suppressions: tuple[Suppression, ...] = ()
 
     def job_selected(self, name: str) -> bool:
         included = any(fnmatch.fnmatchcase(name, p) for p in self.include)
         excluded = any(fnmatch.fnmatchcase(name, p) for p in self.exclude)
+        return included and not excluded
+
+    def database_selected(self, name: str) -> bool:
+        included = any(fnmatch.fnmatchcase(name, p) for p in self.catalog_include)
+        excluded = any(fnmatch.fnmatchcase(name, p) for p in self.catalog_exclude)
         return included and not excluded
 
 
@@ -103,18 +110,18 @@ def _coerce(where: str, value: Any, expected: Any) -> Any:
     raise ConfigError(f"{where}: expected {names.get(expected, 'a valid value')}")
 
 
-def _parse_jobs(raw: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _parse_globs(section: str, raw: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if not isinstance(raw, Mapping):
-        raise ConfigError("[jobs]: expected a table")
+        raise ConfigError(f"[{section}]: expected a table")
     unknown = set(raw) - {"include", "exclude"}
     if unknown:
-        raise ConfigError(f"[jobs]: unknown key(s): {', '.join(sorted(unknown))}")
+        raise ConfigError(f"[{section}]: unknown key(s): {', '.join(sorted(unknown))}")
     include = ("*",)
     if "include" in raw:
-        include = _glob_list("[jobs].include", raw["include"], allow_empty_list=False)
+        include = _glob_list(f"[{section}].include", raw["include"], allow_empty_list=False)
     exclude = ()
     if "exclude" in raw:
-        exclude = _glob_list("[jobs].exclude", raw["exclude"], allow_empty_list=True)
+        exclude = _glob_list(f"[{section}].exclude", raw["exclude"], allow_empty_list=True)
     return include, exclude
 
 
@@ -198,13 +205,16 @@ def parse_config(data: Mapping[str, Any]) -> Config:
     fail_on = data.get("fail_on", "warning")
     if fail_on not in FAIL_ON_CHOICES:
         raise ConfigError(f"fail_on: must be one of {', '.join(FAIL_ON_CHOICES)}")
-    include, exclude = _parse_jobs(data.get("jobs", {}))
+    include, exclude = _parse_globs("jobs", data.get("jobs", {}))
+    catalog_include, catalog_exclude = _parse_globs("catalog", data.get("catalog", {}))
     return Config(
         fail_on=fail_on,
         region=_optional_string(data, "region"),
         profile=_optional_string(data, "profile"),
         include=include,
         exclude=exclude,
+        catalog_include=catalog_include,
+        catalog_exclude=catalog_exclude,
         checks=_parse_checks(data.get("checks", {})),
         suppressions=_parse_suppressions(data.get("suppress", [])),
     )
