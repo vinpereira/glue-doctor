@@ -26,6 +26,7 @@ Requires Python 3.13 or newer.
 glue-doctor audit --profile my-profile --region eu-central-1
 glue-doctor audit --format json | jq '.summary'
 glue-doctor audit --job "etl-*" --fail-on error
+glue-doctor audit --no-catalog   # jobs only: skip the Iceberg optimizer scan
 ```
 
 Example output:
@@ -43,7 +44,7 @@ Example output:
 │          │            │                      │ on by default) and costs less, so validate your job before          │
 │          │            │                      │ migrating                                                           │
 └──────────┴────────────┴──────────────────────┴─────────────────────────────────────────────────────────────────────┘
-2 finding(s) in 34 job(s) and 78 table(s)
+2 finding(s) in 34 job(s) and 12 table(s)
 ```
 
 ## Checks
@@ -182,9 +183,10 @@ If you do not want to grant the S3 permission, disable the check; no S3 call is 
 enabled = false
 ```
 
-To skip the catalog scan set `[checks.iceberg-optimizer-suspended] enabled = false`; no catalog call
-is then made. Without the four Glue permissions and with the check enabled, the catalog is reported
-as a `collect-error` (resource type `catalog`).
+To skip the catalog scan set `[checks.iceberg-optimizer-suspended] enabled = false`, or pass
+`--no-catalog` for one run; no catalog call is then made. `--job` filters jobs only and does not
+narrow the catalog scan. Without the four Glue permissions and with the check enabled, the catalog
+is reported as a `collect-error` (resource type `catalog`).
 
 Without the permission and with the check enabled, every job with Spark UI enabled is reported as a
 `collect-error`, because a failed read must never look like a clean audit. S3 directory buckets
@@ -197,7 +199,8 @@ tool. Only Glue's own special job arguments are read from a job definition; your
 `--format json` prints a document validated by `glue_doctor/schemas/report-v2.json`
 (`schema_version: 2`) on stdout; warnings and errors go to stderr. Findings carry `resource_type`
 (`job`, `table` or `catalog`) and `resource` (a job name, `database.table`, or `catalog` / a
-database name). Version 0.3.0 renamed the former `job` field to `resource`.
+database name). `summary.tables_audited` counts the Iceberg tables whose optimizers were read.
+Version 0.3.0 renamed the former `job` field to `resource`.
 
 ## Development
 

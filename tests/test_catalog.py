@@ -262,6 +262,37 @@ def test_whole_batch_failure_is_a_catalog_issue(glue):
     )
 
 
+def test_tables_in_a_failed_batch_call_are_not_counted_as_audited(glue):
+    client, stub = glue
+    stub.add_response("get_databases", {"DatabaseList": [database("db_a")]})
+    stub.add_response("get_tables", {"TableList": [table("t_ice")]})
+    stub.add_client_error("batch_get_table_optimizer", service_error_code="AccessDeniedException")
+    catalog = collect_catalog(client, everything, 2, now=NOW)
+    assert catalog.tables_audited == 0
+
+
+def test_only_tables_of_the_failed_chunk_are_left_out_of_the_count(glue):
+    client, stub = glue
+    tables = [table(f"t_{n}") for n in range(7)]  # 21 entries: chunks of 20 and 1 (t_6 only)
+    stub.add_response("get_databases", {"DatabaseList": [database("db_a")]})
+    stub.add_response("get_tables", {"TableList": tables})
+    stub.add_response("batch_get_table_optimizer", batch())
+    stub.add_client_error("batch_get_table_optimizer", service_error_code="ThrottlingException")
+    catalog = collect_catalog(client, everything, 2, now=NOW)
+    assert catalog.tables_audited == 6
+
+
+def test_a_table_split_across_chunks_is_not_audited_if_either_chunk_fails(glue):
+    client, stub = glue
+    tables = [table(f"t_{n}") for n in range(7)]  # t_6 has 2 entries in chunk 1 and 1 in chunk 2
+    stub.add_response("get_databases", {"DatabaseList": [database("db_a")]})
+    stub.add_response("get_tables", {"TableList": tables})
+    stub.add_client_error("batch_get_table_optimizer", service_error_code="ThrottlingException")
+    stub.add_response("batch_get_table_optimizer", batch())
+    catalog = collect_catalog(client, everything, 2, now=NOW)
+    assert catalog.tables_audited == 0  # chunk 1 held t_0..t_5 and part of t_6; chunk 2 the rest
+
+
 def test_get_databases_failure_is_a_catalog_issue_and_stops_the_scan(glue):
     client, stub = glue
     stub.add_client_error("get_databases", service_error_code="AccessDeniedException")

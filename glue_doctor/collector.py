@@ -435,10 +435,13 @@ def collect_catalog(
         ]
         chunks = [entries[i : i + BATCH_LIMIT] for i in range(0, len(entries), BATCH_LIMIT)]
         optimizers: list[OptimizerSnapshot] = []
-        for found, call_issue in pool.map(lambda c: _batch_get(client, c, now), chunks):
+        unread: set[tuple[str, str]] = set()  # tables with an entry in a failed batch call
+        results = pool.map(lambda c: _batch_get(client, c, now), chunks)
+        for chunk, (found, call_issue) in zip(chunks, results, strict=True):
             optimizers.extend(found)
             if call_issue is not None:
                 issues.append(call_issue)
+                unread.update((e["databaseName"], e["tableName"]) for e in chunk)
         suspects = [
             o for o in optimizers if o.last_run is not None and o.last_run.event_type == "failed"
         ]
@@ -455,4 +458,5 @@ def collect_catalog(
             )
         )
     optimizers = [refreshed.get(id(o), o) for o in optimizers]
-    return CatalogSnapshot(tuple(optimizers), _merge_scopes(issues), len(tables))
+    audited = len(tables) - len(unread)
+    return CatalogSnapshot(tuple(optimizers), _merge_scopes(issues), audited)

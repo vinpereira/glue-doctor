@@ -61,17 +61,22 @@ def cli() -> None:
     "jobs",
     multiple=True,
     metavar="GLOB",
-    help="Only audit matching jobs (the catalog scan is not affected).",
+    help="Only audit matching jobs (the catalog scan is not affected; see --no-catalog).",
+)
+@click.option(
+    "--no-catalog",
+    is_flag=True,
+    help="Skip the Iceberg optimizer scan of the Data Catalog (no catalog call is made).",
 )
 @click.pass_context
-def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
+def audit(ctx, config_path, region, profile, fmt, fail_on, jobs, no_catalog):
     """Audit the AWS Glue jobs of one account and region (read-only).
 
     Exit codes: 0 no finding at or above --fail-on, 1 findings, 2 usage or config error,
     3 audit impossible (for example missing credentials) or internal error.
     """
     try:
-        code = _run_audit(config_path, region, profile, fmt, fail_on, jobs)
+        code = _run_audit(config_path, region, profile, fmt, fail_on, jobs, no_catalog)
     except (click.ClickException, click.exceptions.Exit):
         raise
     except Exception as exc:  # a crash must never look like "findings found" (exit 1)
@@ -84,7 +89,7 @@ def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
     ctx.exit(code)
 
 
-def _run_audit(config_path, region, profile, fmt, fail_on, jobs) -> int:
+def _run_audit(config_path, region, profile, fmt, fail_on, jobs, no_catalog) -> int:
     if any(not job.strip() for job in jobs):
         raise click.UsageError("--job must not be empty")
     try:
@@ -115,7 +120,7 @@ def _run_audit(config_path, region, profile, fmt, fail_on, jobs) -> int:
             err=True,
         )
     catalog = None
-    if needs_catalog(config):
+    if needs_catalog(config) and not no_catalog:
         catalog = collect_catalog(
             aws.client, config.database_selected, optimizer_min_failures(config)
         )

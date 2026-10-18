@@ -358,6 +358,27 @@ def test_catalog_is_only_scanned_when_the_check_is_enabled(fake_aws, tmp_path):
     assert seen["catalog_called"] is False
 
 
+def test_no_catalog_flag_skips_the_catalog_scan_and_keeps_job_findings(fake_aws):
+    seen = fake_aws([noisy()])
+    result = audit("--no-catalog", "--format", "json")
+    assert result.exit_code == 1  # the job finding still counts
+    assert seen["catalog_called"] is False
+    report = json.loads(result.stdout)
+    assert report["summary"]["tables_audited"] == 0
+
+
+def test_catalog_is_scanned_without_the_flag(fake_aws):
+    seen = fake_aws([make_job(runs=())])
+    assert audit().exit_code == 0
+    assert seen["catalog_called"] is True
+
+
+def test_help_documents_no_catalog():
+    result = CliRunner().invoke(cli, ["audit", "--help"])
+    assert result.exit_code == 0
+    assert "--no-catalog" in result.output
+
+
 def test_catalog_section_filters_databases_and_min_failures_is_passed(fake_aws, tmp_path):
     seen = fake_aws([])
     (tmp_path / "glue-doctor.toml").write_text(

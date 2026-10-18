@@ -13,12 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The report is now about resources, not only jobs. Each finding has `resource_type` (`job`,
   `table` or `catalog`) and `resource`; the former `job` field is gone. The JSON `schema_version`
   is 2 and the schema file is `glue_doctor/schemas/report-v2.json` (`report-v1.json` was removed).
-  `summary` gains `tables_audited`.
+  `summary` gains `tables_audited` (Iceberg tables whose optimizers were read).
 - In `[[suppress]]` the key `job` is now `resource` (a glob over the resource name). An old config
   fails with exit code 2 and a message that names the new key. `--job` and `[jobs]` are unchanged.
 - `--job` and `[jobs]` filter jobs only: the Iceberg optimizer scan of the whole catalog still runs,
   so a pipeline gated on one job also gates on every optimizer and needs the new Glue permissions.
-  Narrow it with `[catalog] include` / `exclude`, or turn it off with
+  Pass `--no-catalog` to skip it, narrow it with `[catalog] include` / `exclude`, or turn it off with
   `[checks.iceberg-optimizer-suspended] enabled = false`.
 
 ### Added
@@ -26,7 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `iceberg-optimizer-suspended` check: reports Iceberg table optimizers (compaction, snapshot
   retention, orphan file deletion) whose last runs keep failing (`min_failures`, default 2) and
   retention or orphan-file-deletion optimizers with no run for more than `stale_days` (default 7).
-- `[catalog] include` / `exclude`: database globs for the catalog scan.
+- `[catalog] include` / `exclude`: database globs for the catalog scan, and `--no-catalog` to skip
+  the scan for one run (no catalog call is made).
 - A catalog read failure is reported as a `collect-error` with `resource_type` `catalog` (the
   resource is `catalog` or the database name) and does not stop the audit of jobs.
 
