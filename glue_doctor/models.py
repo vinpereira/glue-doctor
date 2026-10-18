@@ -73,7 +73,8 @@ class JobSnapshot:
 class Finding:
     check_id: str
     severity: Severity
-    job: str
+    resource_type: str  # "job", "table" or "catalog"
+    resource: str  # a job name, "database.table", or "catalog" / a database name
     message: str
     remediation: str
     evidence: dict[str, Any] = field(default_factory=dict)

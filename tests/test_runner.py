@@ -34,7 +34,7 @@ def test_clean_job_has_no_findings():
 
 def test_findings_are_sorted_by_severity_then_job():
     result = run_checks([noisy_job("b"), noisy_job("a")], default_config(), TODAY)
-    assert [(f.severity.value, f.job) for f in result.findings] == [
+    assert [(f.severity.value, f.resource) for f in result.findings] == [
         ("warning", "a"),
         ("warning", "b"),
         ("info", "a"),
@@ -57,11 +57,13 @@ def test_severity_override_applies_to_the_check():
 
 def test_suppression_moves_matching_findings_with_reason():
     config = cfg(
-        '[[suppress]]\ncheck = "observability-off"\njob = "legacy-*"\nreason = "known gap"'
+        '[[suppress]]\ncheck = "observability-off"\nresource = "legacy-*"\nreason = "known gap"'
     )
     result = run_checks([noisy_job("legacy-a"), noisy_job("new-b")], config, TODAY)
-    assert [(s.finding.job, s.reason) for s in result.suppressed] == [("legacy-a", "known gap")]
-    remaining = {f.job for f in result.findings if f.check_id == "observability-off"}
+    assert [(s.finding.resource, s.reason) for s in result.suppressed] == [
+        ("legacy-a", "known gap")
+    ]
+    remaining = {f.resource for f in result.findings if f.check_id == "observability-off"}
     assert remaining == {"new-b"}
 
 
@@ -75,7 +77,7 @@ def test_expired_suppression_returns_the_finding_and_warns_once():
     config = cfg('[[suppress]]\ncheck = "observability-off"\nreason = "x"\nuntil = 2026-10-07')
     result = run_checks([noisy_job("a"), noisy_job("b")], config, TODAY)
     assert result.suppressed == ()
-    assert {f.job for f in result.findings if f.check_id == "observability-off"} == {"a", "b"}
+    assert {f.resource for f in result.findings if f.check_id == "observability-off"} == {"a", "b"}
     assert len(result.warnings) == 1
     assert "expired on 2026-10-07" in result.warnings[0]
 
@@ -103,7 +105,7 @@ def test_collect_error_flows_through_like_any_other_check():
     ],
 )
 def test_exit_code_for(severity, fail_on, expected):
-    finding = Finding("x", Severity(severity), "job", "m", "r")
+    finding = Finding("x", Severity(severity), "job", "example-job", "m", "r")
     assert exit_code_for([finding], fail_on) == expected
 
 

@@ -30,7 +30,8 @@ def check_spark_ui(job: JobSnapshot, params: NoParams) -> list[Finding]:
         Finding(
             check_id="spark-ui-no-lifecycle",
             severity=Severity.WARNING,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=(
                 f"Spark UI event logs at {location} are never expired "
                 "(no lifecycle rule removes them)"

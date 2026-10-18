@@ -20,7 +20,8 @@ def check_collect_error(job: JobSnapshot, params: NoParams) -> list[Finding]:
         Finding(
             check_id="collect-error",
             severity=Severity.WARNING,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=(
                 f"Could not read data for this job ({issue.operation}: {issue.code}); "
                 "checks that need it were skipped"

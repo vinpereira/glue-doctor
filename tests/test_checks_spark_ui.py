@@ -39,7 +39,8 @@ def test_no_lifecycle_configuration():
     [finding] = run(job_with(()))
     assert finding.check_id == "spark-ui-no-lifecycle"
     assert finding.severity is Severity.WARNING
-    assert finding.job == "example-job"
+    assert finding.resource == "example-job"
+    assert finding.resource_type == "job"
     assert finding.evidence == {
         "bucket": "example-logs",
         "prefix": "spark-ui/",

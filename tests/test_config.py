@@ -54,7 +54,7 @@ require = ["metrics"]
 
 [[suppress]]
 check = "glue-version"
-job = "legacy-*"
+resource = "legacy-*"
 reason = "pending migration"
 until = 2027-01-31
 """
@@ -67,7 +67,7 @@ until = 2027-01-31
     obs = cfg.checks["observability-off"]
     assert obs.enabled is False and obs.params.require == ("metrics",)
     sup = cfg.suppressions[0]
-    assert (sup.check, sup.job, sup.reason, sup.until) == (
+    assert (sup.check, sup.resource, sup.reason, sup.until) == (
         "glue-version",
         "legacy-*",
         "pending migration",
@@ -83,7 +83,7 @@ def test_min_timeout_minutes_is_configurable():
 
 def test_suppression_job_defaults_to_all_jobs():
     cfg = parse('[[suppress]]\ncheck = "glue-version"\nreason = "x"')
-    assert cfg.suppressions[0].job == "*" and cfg.suppressions[0].until is None
+    assert cfg.suppressions[0].resource == "*" and cfg.suppressions[0].until is None
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,15 @@ def test_suppression_job_defaults_to_all_jobs():
         ('[jobs]\ninclude = [""]', "include"),
         ('[jobs]\nexclude = [" "]', "exclude"),
         ('[[suppress]]\ncheck = ["glue-version"]\nreason = "x"', "check"),
-        ('[[suppress]]\ncheck = "glue-version"\nreason = "x"\njob = ""', "job"),
+        ('[[suppress]]\ncheck = "glue-version"\nreason = "x"\nresource = ""', "resource"),
+        (
+            '[[suppress]]\ncheck = "glue-version"\nreason = "x"\njob = "legacy-*"',
+            "renamed to 'resource'",
+        ),
+        (
+            '[[suppress]]\ncheck = "glue-version"\nreason = "x"\nbogus = 1',
+            "allowed: check, reason, resource, until",
+        ),
         ("[checks.timeout-too-generous]\nmin_runs = 30", "min_runs"),
         ("[checks.timeout-too-tight]\nmin_runs = 30", "min_runs"),
         ("[checks.timeout-too-generous]\nmax_ratio = nan", "max_ratio"),

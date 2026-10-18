@@ -36,7 +36,8 @@ def check_version(job: JobSnapshot, params: VersionParams) -> list[Finding]:
         Finding(
             check_id="glue-version",
             severity=severity,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=f"Glue {format_version(version)}{detail} is older than "
             f"{format_version(target)}",
             remediation=(

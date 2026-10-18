@@ -23,7 +23,8 @@ def test_generous_flags_timeout_far_above_median():
     [finding] = check_generous(job, GenerousParams())
     assert finding.check_id == "timeout-too-generous"
     assert finding.severity is Severity.WARNING
-    assert finding.job == "example-job"
+    assert finding.resource == "example-job"
+    assert finding.resource_type == "job"
     assert finding.evidence["timeout_min"] == 2880
     assert finding.evidence["median_min"] == 10.0
     assert finding.evidence["runs_used"] == 20

@@ -14,51 +14,59 @@ from glue_doctor.report import SCHEMA_VERSION, build_report, render_json, render
 from glue_doctor.runner import AuditResult, SuppressedFinding
 
 
-def finding(job="example-job", check="timeout-too-generous", severity=Severity.WARNING):
+def finding(
+    resource="example-job",
+    check="timeout-too-generous",
+    severity=Severity.WARNING,
+    resource_type="job",
+):
     return Finding(
         check_id=check,
         severity=severity,
-        job=job,
+        resource_type=resource_type,
+        resource=resource,
         message="Timeout is 2880 min but the median successful run takes 10 min",
         remediation="Set the timeout closer to the observed runtime",
         evidence={"timeout_min": 2880, "median_min": 10.0},
     )
 
 
-def result(findings=(), suppressed=(), jobs=3):
+def result(findings=(), suppressed=(), jobs=3, tables=0):
     return AuditResult(
         findings=tuple(findings),
         suppressed=tuple(suppressed),
         jobs_audited=jobs,
         warnings=(),
+        tables_audited=tables,
     )
 
 
 def schema():
-    text = (resources.files("glue_doctor") / "schemas" / "report-v1.json").read_text("utf-8")
+    text = (resources.files("glue_doctor") / "schemas" / "report-v2.json").read_text("utf-8")
     return json.loads(text)
 
 
 def test_report_structure_and_summary():
     res = result(
         [finding(), finding(check="observability-off", severity=Severity.INFO)],
-        [SuppressedFinding(finding(job="legacy"), "known gap")],
+        [SuppressedFinding(finding(resource="legacy"), "known gap")],
     )
     report = build_report(res, region="eu-central-1", account_id="123456789012", exit_code=1)
-    assert report["schema_version"] == SCHEMA_VERSION == 1
+    assert report["schema_version"] == SCHEMA_VERSION == 2
     assert report["tool"] == {"name": "glue-doctor", "version": __version__}
     assert report["scope"] == {"region": "eu-central-1", "account_id": "123456789012"}
     assert report["summary"] == {
         "jobs_audited": 3,
+        "tables_audited": 0,
         "findings": {"error": 0, "warning": 1, "info": 1},
         "exit_code": 1,
     }
     assert report["suppressed"][0]["reason"] == "known gap"
-    assert report["suppressed"][0]["job"] == "legacy"
+    assert report["suppressed"][0]["resource"] == "legacy"
 
 
 def test_report_validates_against_the_json_schema():
-    res = result([finding()], [SuppressedFinding(finding(job="legacy"), "known gap")])
+    res = result([finding()], [SuppressedFinding(finding(resource="legacy"), "known gap")])
     report = build_report(res, region="eu-central-1", account_id=None, exit_code=1)
     jsonschema.validate(report, schema())
     jsonschema.validate(json.loads(render_json(report)), schema())
@@ -73,17 +81,22 @@ def test_schema_rejects_unknown_top_level_keys():
 
 def test_json_keeps_non_ascii_and_markup_characters():
     report = build_report(
-        result([finding(job="[bold]étl-ñ")]), region="eu-central-1", account_id=None, exit_code=1
+        result([finding(resource="[bold]étl-ñ")]),
+        region="eu-central-1",
+        account_id=None,
+        exit_code=1,
     )
     text = render_json(report)
     assert "[bold]étl-ñ" in text
-    assert json.loads(text)["findings"][0]["job"] == "[bold]étl-ñ"
+    assert json.loads(text)["findings"][0]["resource"] == "[bold]étl-ñ"
 
 
 def test_table_lists_findings_and_summary(monkeypatch, capsys):
     monkeypatch.setenv("COLUMNS", "200")
     report = build_report(
-        result([finding(), finding(job="other", check="glue-version", severity=Severity.INFO)]),
+        result(
+            [finding(), finding(resource="other", check="glue-version", severity=Severity.INFO)]
+        ),
         region="eu-central-1",
         account_id=None,
         exit_code=1,
@@ -107,7 +120,10 @@ def test_table_without_findings(monkeypatch, capsys):
 def test_table_renders_markup_characters_literally(monkeypatch, capsys):
     monkeypatch.setenv("COLUMNS", "200")
     report = build_report(
-        result([finding(job="[bold]étl-ñ")]), region="eu-central-1", account_id=None, exit_code=1
+        result([finding(resource="[bold]étl-ñ")]),
+        region="eu-central-1",
+        account_id=None,
+        exit_code=1,
     )
     render_table(report)
     assert "[bold]étl-ñ" in capsys.readouterr().out
@@ -116,7 +132,7 @@ def test_table_renders_markup_characters_literally(monkeypatch, capsys):
 def test_table_never_wraps_the_check_id_on_a_narrow_terminal(monkeypatch, capsys):
     monkeypatch.setenv("COLUMNS", "60")
     report = build_report(
-        result([finding(job="a-rather-long-job-name-for-a-narrow-terminal")]),
+        result([finding(resource="a-rather-long-job-name-for-a-narrow-terminal")]),
         region="eu-central-1",
         account_id=None,
         exit_code=1,
@@ -127,7 +143,7 @@ def test_table_never_wraps_the_check_id_on_a_narrow_terminal(monkeypatch, capsys
 
 def test_table_mentions_suppressed_count(monkeypatch, capsys):
     monkeypatch.setenv("COLUMNS", "200")
-    res = result([finding()], [SuppressedFinding(finding(job="legacy"), "known gap")])
+    res = result([finding()], [SuppressedFinding(finding(resource="legacy"), "known gap")])
     render_table(build_report(res, region="eu-central-1", account_id=None, exit_code=1))
     assert "1 suppressed" in capsys.readouterr().out
 
@@ -141,7 +157,9 @@ from glue_doctor.models import Finding, Severity
 from glue_doctor.report import build_report, render_table
 from glue_doctor.runner import AuditResult
 
-finding = Finding("timeout-too-generous", Severity.WARNING, "example-job", "message", "fix", {})
+finding = Finding(
+    "timeout-too-generous", Severity.WARNING, "job", "example-job", "message", "fix", {}
+)
 result = AuditResult((finding,), (), 1, ())
 render_table(build_report(result, region="eu-central-1", account_id=None, exit_code=1))
 """
@@ -184,3 +202,39 @@ def test_table_has_no_color_codes_when_no_color_is_set():
     output = _render_on_a_terminal({"NO_COLOR": "1"})
     assert "timeout-too-generous" in output
     assert not _COLOR_CODE.search(output)
+
+
+def test_findings_carry_the_resource_type():
+    table = finding(resource="example_db.example_table", resource_type="table", check="x-check")
+    catalog = finding(resource="catalog", resource_type="catalog", check="collect-error")
+    report = build_report(
+        result([finding(), table, catalog]), region="eu-central-1", account_id=None, exit_code=1
+    )
+    assert [f["resource_type"] for f in report["findings"]] == ["job", "table", "catalog"]
+    jsonschema.validate(report, schema())
+
+
+def test_schema_rejects_an_unknown_resource_type():
+    report = build_report(result([finding()]), region="eu-central-1", account_id=None, exit_code=1)
+    report["findings"][0]["resource_type"] = "database"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(report, schema())
+
+
+def test_summary_counts_tables(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "200")
+    res = result([finding(resource="example_db.example_table", resource_type="table")], tables=4)
+    report = build_report(res, region="eu-central-1", account_id=None, exit_code=1)
+    assert report["summary"]["tables_audited"] == 4
+    render_table(report)
+    out = capsys.readouterr().out
+    assert "1 finding(s) in 3 job(s) and 4 table(s)" in out
+
+
+def test_table_column_is_titled_resource(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "200")
+    render_table(
+        build_report(result([finding()]), region="eu-central-1", account_id=None, exit_code=1)
+    )
+    out = capsys.readouterr().out
+    assert "Resource" in out and "Job " not in out

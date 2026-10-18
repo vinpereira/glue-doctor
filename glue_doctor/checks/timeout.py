@@ -74,7 +74,8 @@ def check_generous(job: JobSnapshot, params: GenerousParams) -> list[Finding]:
         Finding(
             check_id="timeout-too-generous",
             severity=Severity.WARNING,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=message,
             remediation=(
                 "Set the timeout closer to the observed runtime so a hung run is stopped early"
@@ -116,7 +117,8 @@ def check_tight(job: JobSnapshot, params: TightParams) -> list[Finding]:
         Finding(
             check_id="timeout-too-tight",
             severity=Severity.WARNING,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=(
                 f"The slowest 5% of recent runs take {p95_min:.0f} min, close to the "
                 f"{timeout} min timeout ({timeout_runs} of {len(sample)} runs timed out)"

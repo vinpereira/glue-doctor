@@ -23,7 +23,7 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Suppression:
     check: str
-    job: str
+    resource: str
     reason: str
     until: date | None
 
@@ -165,22 +165,29 @@ def _parse_suppressions(raw: Any) -> tuple[Suppression, ...]:
         where = f"[[suppress]] #{index}"
         if not isinstance(item, Mapping):
             raise ConfigError(f"{where}: expected a table")
-        unknown = set(item) - {"check", "job", "reason", "until"}
+        allowed = {"check", "resource", "reason", "until"}
+        unknown = set(item) - allowed
         if unknown:
-            raise ConfigError(f"{where}: unknown key(s): {', '.join(sorted(unknown))}")
+            hint = " ('job' was renamed to 'resource' in 0.3.0)" if "job" in unknown else ""
+            raise ConfigError(
+                f"{where}: unknown key(s): {', '.join(sorted(unknown))}{hint}; "
+                f"allowed: {', '.join(sorted(allowed))}"
+            )
         check = item.get("check")
         if not isinstance(check, str) or check not in REGISTRY:
             raise ConfigError(f"{where}: unknown check {check!r}")
         reason = item.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ConfigError(f"{where}: 'reason' is required and must not be empty")
-        job = item.get("job", "*")
-        if not isinstance(job, str) or not job.strip():
-            raise ConfigError(f"{where}: 'job' must be a non-empty string glob")
+        resource = item.get("resource", "*")
+        if not isinstance(resource, str) or not resource.strip():
+            raise ConfigError(f"{where}: 'resource' must be a non-empty string glob")
         until = item.get("until")
         if until is not None and type(until) is not date:
             raise ConfigError(f"{where}: 'until' must be a TOML date (YYYY-MM-DD)")
-        result.append(Suppression(check=check, job=job, reason=reason.strip(), until=until))
+        result.append(
+            Suppression(check=check, resource=resource, reason=reason.strip(), until=until)
+        )
     return tuple(result)
 
 

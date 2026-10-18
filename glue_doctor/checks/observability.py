@@ -51,7 +51,8 @@ def check_observability(job: JobSnapshot, params: ObservabilityParams) -> list[F
         Finding(
             check_id="observability-off",
             severity=Severity.INFO,
-            job=job.name,
+            resource_type="job",
+            resource=job.name,
             message=f"Observability settings are off: {', '.join(missing)}",
             remediation=(
                 "Enable these job parameters so failures and resource usage can be diagnosed "

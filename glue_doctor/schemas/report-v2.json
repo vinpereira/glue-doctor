@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "glue-doctor report, schema version 1",
+  "title": "glue-doctor report, schema version 2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "tool", "scope", "summary", "findings", "suppressed"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "tool": {
       "type": "object",
       "additionalProperties": false,
@@ -24,9 +24,10 @@
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["jobs_audited", "findings", "exit_code"],
+      "required": ["jobs_audited", "tables_audited", "findings", "exit_code"],
       "properties": {
         "jobs_audited": { "type": "integer", "minimum": 0 },
+        "tables_audited": { "type": "integer", "minimum": 0 },
         "findings": {
           "type": "object",
           "additionalProperties": false,
@@ -54,11 +55,12 @@
   "$defs": {
     "finding": {
       "type": "object",
-      "required": ["check_id", "severity", "job", "message", "remediation", "evidence"],
+      "required": ["check_id", "severity", "resource_type", "resource", "message", "remediation", "evidence"],
       "properties": {
         "check_id": { "type": "string" },
         "severity": { "enum": ["error", "warning", "info"] },
-        "job": { "type": "string" },
+        "resource_type": { "enum": ["job", "table", "catalog"] },
+        "resource": { "type": "string" },
         "message": { "type": "string" },
         "remediation": { "type": "string" },
         "evidence": { "type": "object" },

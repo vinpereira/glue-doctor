@@ -5,7 +5,7 @@ from glue_doctor import __version__
 from glue_doctor.models import Finding, Severity
 from glue_doctor.runner import AuditResult
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _STYLES = {"error": "red", "warning": "yellow", "info": "blue"}
 
@@ -14,7 +14,8 @@ def _finding_dict(finding: Finding) -> dict[str, Any]:
     return {
         "check_id": finding.check_id,
         "severity": finding.severity.value,
-        "job": finding.job,
+        "resource_type": finding.resource_type,
+        "resource": finding.resource,
         "message": finding.message,
         "remediation": finding.remediation,
         "evidence": finding.evidence,
@@ -33,6 +34,7 @@ def build_report(
         "scope": {"region": region, "account_id": account_id},
         "summary": {
             "jobs_audited": result.jobs_audited,
+            "tables_audited": result.tables_audited,
             "findings": counts,
             "exit_code": exit_code,
         },
@@ -53,22 +55,24 @@ def render_table(report: dict[str, Any]) -> None:
     console = Console()
     findings = report["findings"]
     jobs = report["summary"]["jobs_audited"]
+    tables = report["summary"]["tables_audited"]
+    scope = f"{jobs} job(s)" + (f" and {tables} table(s)" if tables else "")
     suppressed = len(report["suppressed"])
     suffix = f" ({suppressed} suppressed)" if suppressed else ""
     if not findings:
-        console.print(f"No findings in {jobs} job(s){suffix}")
+        console.print(f"No findings in {scope}{suffix}")
         return
     table = Table(show_lines=False)
     table.add_column("Severity", no_wrap=True)
-    table.add_column("Job", overflow="fold")
+    table.add_column("Resource", overflow="fold")
     table.add_column("Check", no_wrap=True)
     table.add_column("Message", overflow="fold")
     for item in findings:
         table.add_row(
             Text(item["severity"], style=_STYLES[item["severity"]]),
-            Text(item["job"]),
+            Text(item["resource"]),
             Text(item["check_id"]),
             Text.assemble(item["message"], ("\n" + item["remediation"], "dim")),
         )
     console.print(table)
-    console.print(f"{len(findings)} finding(s) in {jobs} job(s){suffix}")
+    console.print(f"{len(findings)} finding(s) in {scope}{suffix}")

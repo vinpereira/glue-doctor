@@ -20,13 +20,14 @@ class AuditResult:
     suppressed: tuple[SuppressedFinding, ...]
     jobs_audited: int
     warnings: tuple[str, ...]
+    tables_audited: int = 0
 
 
 def _matching(finding: Finding, suppressions: Sequence[Suppression]) -> list[Suppression]:
     return [
         s
         for s in suppressions
-        if s.check == finding.check_id and fnmatch.fnmatchcase(finding.job, s.job)
+        if s.check == finding.check_id and fnmatch.fnmatchcase(finding.resource, s.resource)
     ]
 
 
@@ -51,9 +52,9 @@ def run_checks(snapshots: Sequence[JobSnapshot], config: Config, today: date) ->
                     findings.append(finding)
                     expired_hits.update(matches)
 
-    findings.sort(key=lambda f: (-f.severity.rank, f.job, f.check_id))
+    findings.sort(key=lambda f: (-f.severity.rank, f.resource, f.check_id))
     warnings = sorted(
-        f"suppression for '{s.check}' on '{s.job}' expired on {s.until.isoformat()}; "
+        f"suppression for '{s.check}' on '{s.resource}' expired on {s.until.isoformat()}; "
         "its findings are reported again"
         for s in expired_hits
     )
