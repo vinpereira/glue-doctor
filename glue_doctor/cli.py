@@ -56,7 +56,13 @@ def cli() -> None:
     type=click.Choice(list(FAIL_ON_CHOICES)),
     help="Lowest severity that makes the exit code non-zero (default: warning).",
 )
-@click.option("--job", "jobs", multiple=True, metavar="GLOB", help="Only audit matching jobs.")
+@click.option(
+    "--job",
+    "jobs",
+    multiple=True,
+    metavar="GLOB",
+    help="Only audit matching jobs (the catalog scan is not affected).",
+)
 @click.pass_context
 def audit(ctx, config_path, region, profile, fmt, fail_on, jobs):
     """Audit the AWS Glue jobs of one account and region (read-only).

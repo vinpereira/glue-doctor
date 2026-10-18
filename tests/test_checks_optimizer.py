@@ -104,6 +104,38 @@ def test_a_disabled_stale_optimizer_is_not_reported():
     assert run(make_optimizer("retention", enabled=False, age_days=30)) == []
 
 
+def test_a_single_old_failure_does_not_hide_a_stopped_daily_optimizer():
+    optimizer = make_optimizer(
+        "retention", last_event="failed", age_days=30, recent=("failed", "completed")
+    )
+    [finding] = run(optimizer)
+    assert finding.evidence["reason"] == "no-recent-run"
+    assert finding.evidence["last_run_age_days"] == 30
+
+
+def test_a_below_threshold_streak_still_reports_a_stopped_daily_optimizer():
+    optimizer = make_optimizer(
+        "orphan_file_deletion", last_event="failed", age_days=20, recent=("failed", "failed")
+    )
+    [finding] = run(optimizer, min_failures=3)
+    assert finding.evidence["reason"] == "no-recent-run"
+
+
+def test_a_single_old_failure_of_compaction_is_still_not_reported():
+    optimizer = make_optimizer(
+        "compaction", last_event="failed", age_days=30, recent=("failed", "completed")
+    )
+    assert run(optimizer) == []
+
+
+def test_a_failure_streak_wins_over_the_stale_rule():
+    optimizer = make_optimizer(
+        "retention", last_event="failed", age_days=30, recent=("failed", "failed")
+    )
+    [finding] = run(optimizer)
+    assert finding.evidence["reason"] == "last-run-failed"
+
+
 # --- what is never reported -----------------------------------------------------------------
 
 

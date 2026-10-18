@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `summary` gains `tables_audited`.
 - In `[[suppress]]` the key `job` is now `resource` (a glob over the resource name). An old config
   fails with exit code 2 and a message that names the new key. `--job` and `[jobs]` are unchanged.
+- `--job` and `[jobs]` filter jobs only: the Iceberg optimizer scan of the whole catalog still runs,
+  so a pipeline gated on one job also gates on every optimizer and needs the new Glue permissions.
+  Narrow it with `[catalog] include` / `exclude`, or turn it off with
+  `[checks.iceberg-optimizer-suspended] enabled = false`.
 
 ### Added
 

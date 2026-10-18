@@ -216,6 +216,12 @@ def test_table_output(fake_aws):
     assert "timeout-too-generous" in result.stdout and "example-job" in result.stdout
 
 
+def test_job_option_help_says_the_catalog_scan_is_not_filtered():
+    result = CliRunner().invoke(cli, ["audit", "--help"])
+    assert result.exit_code == 0
+    assert "catalog scan is not affected" in " ".join(result.output.split())
+
+
 def test_help_lists_every_check_without_credentials():
     result = CliRunner().invoke(cli, ["audit", "--help"])
     assert result.exit_code == 0

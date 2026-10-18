@@ -57,22 +57,22 @@ def check_optimizer(optimizer: OptimizerSnapshot, params: OptimizerParams) -> li
     kind = optimizer.optimizer_type
     if run.event_type == "failed":
         streak = _failure_streak(optimizer)
-        if streak < params.min_failures:
-            return []
-        message = f"{kind} optimizer on {optimizer.resource}: the last {streak} runs failed"
-        if not optimizer.enabled:
-            message += " (the optimizer is also disabled)"
-        return [
-            Finding(
-                check_id=CHECK_ID,
-                severity=Severity.WARNING,
-                resource_type="table",
-                resource=optimizer.resource,
-                message=message,
-                remediation=_REMEDIATION,
-                evidence=_evidence(optimizer, "last-run-failed", consecutive_failures=streak),
-            )
-        ]
+        if streak >= params.min_failures:
+            message = f"{kind} optimizer on {optimizer.resource}: the last {streak} runs failed"
+            if not optimizer.enabled:
+                message += " (the optimizer is also disabled)"
+            return [
+                Finding(
+                    check_id=CHECK_ID,
+                    severity=Severity.WARNING,
+                    resource_type="table",
+                    resource=optimizer.resource,
+                    message=message,
+                    remediation=_REMEDIATION,
+                    evidence=_evidence(optimizer, "last-run-failed", consecutive_failures=streak),
+                )
+            ]
+        # below the threshold: a daily optimizer that then stopped is still caught below
     if (
         kind in DAILY_TYPES
         and optimizer.enabled
