@@ -5,9 +5,9 @@ import pytest
 
 from glue_doctor.checks import REGISTRY
 from glue_doctor.config import default_config, parse_config
-from glue_doctor.models import CollectIssue, Finding, Severity
+from glue_doctor.models import CatalogScope, CatalogSnapshot, CollectIssue, Finding, Severity
 from glue_doctor.runner import exit_code_for, run_checks
-from tests.factories import make_job
+from tests.factories import make_job, make_optimizer
 
 TODAY = date(2026, 10, 8)
 
@@ -111,3 +111,40 @@ def test_exit_code_for(severity, fail_on, expected):
 
 def test_exit_code_without_findings_is_zero():
     assert exit_code_for([], "info") == 0
+
+
+def test_optimizer_findings_use_their_own_subject_and_count_tables():
+    broken = make_optimizer("compaction", last_event="failed", recent=("failed", "failed"))
+    catalog = CatalogSnapshot((broken,), (), 5)
+    result = run_checks([make_job(runs=())], default_config(), TODAY, catalog=catalog)
+    [finding] = result.findings
+    assert (finding.check_id, finding.resource_type) == ("iceberg-optimizer-suspended", "table")
+    assert result.tables_audited == 5 and result.jobs_audited == 1
+
+
+def test_job_checks_never_run_on_optimizers():
+    only_jobs = cfg(only("timeout-too-generous"))
+    catalog = CatalogSnapshot((make_optimizer("retention", age_days=30),), (), 1)
+    assert run_checks([], only_jobs, TODAY, catalog=catalog).findings == ()
+
+
+def test_catalog_scopes_become_collect_errors():
+    issue = CollectIssue("GetDatabases", "AccessDeniedException", "catalog")
+    scope = CatalogScope("catalog", (issue,))
+    result = run_checks([], default_config(), TODAY, catalog=CatalogSnapshot((), (scope,), 0))
+    [finding] = result.findings
+    assert (finding.check_id, finding.resource_type, finding.resource) == (
+        "collect-error",
+        "catalog",
+        "catalog",
+    )
+
+
+def test_optimizer_findings_can_be_suppressed_by_resource_glob():
+    broken = make_optimizer("compaction", last_event="failed", recent=("failed", "failed"))
+    config = cfg(
+        '[[suppress]]\ncheck = "iceberg-optimizer-suspended"\n'
+        'resource = "example_db.*"\nreason = "known"'
+    )
+    result = run_checks([], config, TODAY, catalog=CatalogSnapshot((broken,), (), 1))
+    assert result.findings == () and len(result.suppressed) == 1

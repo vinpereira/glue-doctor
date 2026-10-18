@@ -6,13 +6,15 @@ import click
 
 from glue_doctor import __version__
 from glue_doctor.checks import REGISTRY
-from glue_doctor.collector import AuditAborted, collect_snapshots, connect
+from glue_doctor.collector import AuditAborted, collect_catalog, collect_snapshots, connect
 from glue_doctor.config import (
     FAIL_ON_CHOICES,
     ConfigError,
     discover_config_path,
     load_config,
+    needs_catalog,
     needs_event_log_lifecycle,
+    optimizer_min_failures,
     runs_needed,
 )
 from glue_doctor.report import build_report, render_json, render_table
@@ -106,7 +108,12 @@ def _run_audit(config_path, region, profile, fmt, fail_on, jobs) -> int:
             "Warning: no jobs were audited; check --job/include patterns and the region",
             err=True,
         )
-    result = run_checks(snapshots, config, date.today())
+    catalog = None
+    if needs_catalog(config):
+        catalog = collect_catalog(
+            aws.client, config.database_selected, optimizer_min_failures(config)
+        )
+    result = run_checks(snapshots, config, date.today(), catalog=catalog)
     for warning in result.warnings:
         click.echo(f"Warning: {warning}", err=True)
     code = exit_code_for(result.findings, config.fail_on)

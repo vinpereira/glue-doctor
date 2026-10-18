@@ -259,3 +259,16 @@ def needs_event_log_lifecycle(config: Config) -> bool:
         settings.enabled and REGISTRY[check_id].needs_event_log_lifecycle
         for check_id, settings in config.checks.items()
     )
+
+
+def needs_catalog(config: Config) -> bool:
+    """Whether the collector must scan the Data Catalog (an enabled check needs it)."""
+    return any(
+        settings.enabled and REGISTRY[check_id].needs_catalog
+        for check_id, settings in config.checks.items()
+    )
+
+
+def optimizer_min_failures(config: Config) -> int:
+    """How many consecutive failures the optimizer check needs, which sets the history to read."""
+    return config.checks["iceberg-optimizer-suspended"].params.min_failures

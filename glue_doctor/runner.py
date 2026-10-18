@@ -5,7 +5,7 @@ from datetime import date
 
 from glue_doctor.checks import REGISTRY
 from glue_doctor.config import Config, Suppression
-from glue_doctor.models import Finding, JobSnapshot, Severity
+from glue_doctor.models import CatalogSnapshot, Finding, JobSnapshot, Severity
 
 
 @dataclass(frozen=True)
@@ -31,17 +31,32 @@ def _matching(finding: Finding, suppressions: Sequence[Suppression]) -> list[Sup
     ]
 
 
-def run_checks(snapshots: Sequence[JobSnapshot], config: Config, today: date) -> AuditResult:
+def _subjects(spec, snapshots, catalog):
+    optimizers = list(catalog.optimizers) if catalog else []
+    scopes = list(catalog.scopes) if catalog else []
+    if spec.subject == "job":
+        return list(snapshots)
+    if spec.subject == "optimizer":
+        return optimizers
+    return [*snapshots, *optimizers, *scopes]  # "any": collect-error
+
+
+def run_checks(
+    snapshots: Sequence[JobSnapshot],
+    config: Config,
+    today: date,
+    catalog: CatalogSnapshot | None = None,
+) -> AuditResult:
     findings: list[Finding] = []
     suppressed: list[SuppressedFinding] = []
     expired_hits: set[Suppression] = set()
 
-    for snapshot in snapshots:
-        for check_id, spec in REGISTRY.items():
-            settings = config.checks[check_id]
-            if not settings.enabled:
-                continue
-            for finding in spec.run(snapshot, settings.params):
+    for check_id, spec in REGISTRY.items():
+        settings = config.checks[check_id]
+        if not settings.enabled:
+            continue
+        for subject in _subjects(spec, snapshots, catalog):
+            for finding in spec.run(subject, settings.params):
                 if settings.severity is not None:
                     finding = replace(finding, severity=settings.severity)
                 matches = _matching(finding, config.suppressions)
@@ -63,6 +78,7 @@ def run_checks(snapshots: Sequence[JobSnapshot], config: Config, today: date) ->
         suppressed=tuple(suppressed),
         jobs_audited=len(snapshots),
         warnings=tuple(warnings),
+        tables_audited=catalog.tables_audited if catalog else 0,
     )
 
 

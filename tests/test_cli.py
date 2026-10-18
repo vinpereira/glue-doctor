@@ -9,14 +9,20 @@ from click.testing import CliRunner
 from glue_doctor import cli as cli_module
 from glue_doctor.cli import cli
 from glue_doctor.collector import AuditAborted, AwsContext, ReadOnlyViolation
-from glue_doctor.models import CollectIssue, EventLogs, LifecycleRule
-from tests.factories import make_job
+from glue_doctor.models import (
+    CatalogScope,
+    CatalogSnapshot,
+    CollectIssue,
+    EventLogs,
+    LifecycleRule,
+)
+from tests.factories import make_job, make_optimizer
 
 
 @pytest.fixture
 def fake_aws(monkeypatch):
-    def install(snapshots):
-        seen = {}
+    def install(snapshots, catalog=None):
+        seen = {"catalog_called": False}
 
         def fake_connect(profile, region):
             seen["profile"], seen["region"] = profile, region
@@ -28,8 +34,14 @@ def fake_aws(monkeypatch):
             seen["filter"], seen["wanted"], seen["s3_client"] = job_filter, wanted_runs, s3_client
             return snapshots
 
+        def fake_catalog(client, database_filter, min_failures, now=None):
+            seen["database_filter"], seen["min_failures"] = database_filter, min_failures
+            seen["catalog_called"] = True
+            return catalog or CatalogSnapshot((), (), 0)
+
         monkeypatch.setattr(cli_module, "connect", fake_connect)
         monkeypatch.setattr(cli_module, "collect_snapshots", fake_collect)
+        monkeypatch.setattr(cli_module, "collect_catalog", fake_catalog)
         return seen
 
     return install
@@ -213,6 +225,7 @@ def test_help_lists_every_check_without_credentials():
         "glue-version",
         "observability-off",
         "spark-ui-no-lifecycle",
+        "iceberg-optimizer-suspended",
         "collect-error",
     ):
         assert check_id in result.stdout
@@ -226,10 +239,12 @@ def test_json_format_never_imports_rich():
         from click.testing import CliRunner
         from glue_doctor import cli as cli_module
         from glue_doctor.collector import AwsContext
+        from glue_doctor.models import CatalogSnapshot
 
         ctx = AwsContext(client=object(), region="eu-central-1", account_id=None)
         with mock.patch.object(cli_module, "connect", return_value=ctx), \\
-             mock.patch.object(cli_module, "collect_snapshots", return_value=[]):
+             mock.patch.object(cli_module, "collect_snapshots", return_value=[]), \\
+             mock.patch.object(cli_module, "collect_catalog", return_value=CatalogSnapshot((), (), 0)):
             result = CliRunner().invoke(cli_module.cli, ["audit", "--format", "json"])
         assert result.exit_code == 0, result.output
         assert "rich" not in sys.modules, "rich was imported on the JSON path"
@@ -283,3 +298,65 @@ def test_s3_client_is_only_passed_when_the_check_is_enabled(fake_aws, tmp_path):
     (tmp_path / "glue-doctor.toml").write_text("[checks.spark-ui-no-lifecycle]\nenabled = false\n")
     audit()
     assert seen["s3_client"] is None
+
+
+def test_a_failing_optimizer_is_a_finding_with_a_table_resource(fake_aws):
+    broken = make_optimizer("compaction", last_event="failed", recent=("failed", "failed"))
+    fake_aws([], catalog=CatalogSnapshot((broken,), (), 3))
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    [finding] = report["findings"]
+    assert (finding["resource_type"], finding["resource"]) == ("table", "example_db.example_table")
+    assert report["summary"]["tables_audited"] == 3 and report["schema_version"] == 2
+
+
+def test_healthy_catalog_is_clean(fake_aws):
+    healthy = make_optimizer("retention", age_days=1)
+    fake_aws([], catalog=CatalogSnapshot((healthy,), (), 1))
+    assert audit().exit_code == 0
+
+
+def test_catalog_denial_is_a_catalog_collect_error(fake_aws):
+    issue = CollectIssue("GetDatabases", "AccessDeniedException", "catalog")
+    catalog = CatalogSnapshot((), (CatalogScope("catalog", (issue,)),), 0)
+    fake_aws([make_job(runs=())], catalog=catalog)
+    result = audit("--format", "json")
+    assert result.exit_code == 1
+    [finding] = json.loads(result.stdout)["findings"]
+    assert (finding["check_id"], finding["resource_type"]) == ("collect-error", "catalog")
+    assert "glue:GetDatabases" in finding["remediation"]
+    assert "iceberg-optimizer-suspended" in finding["remediation"]
+
+
+def test_one_database_failing_does_not_hide_the_rest(fake_aws):
+    issue = CollectIssue("GetTables", "AccessDeniedException", "example_db")
+    broken = make_optimizer(
+        "compaction", database="other_db", last_event="failed", recent=("failed", "failed")
+    )
+    fake_aws([], catalog=CatalogSnapshot((broken,), (CatalogScope("example_db", (issue,)),), 2))
+    findings = json.loads(audit("--format", "json").stdout)["findings"]
+    ids = sorted(f["check_id"] for f in findings)
+    assert ids == ["collect-error", "iceberg-optimizer-suspended"]
+
+
+def test_catalog_is_only_scanned_when_the_check_is_enabled(fake_aws, tmp_path):
+    seen = fake_aws([])
+    audit()
+    assert seen["catalog_called"] is True and seen["min_failures"] == 2
+    seen["catalog_called"] = False
+    (tmp_path / "glue-doctor.toml").write_text(
+        "[checks.iceberg-optimizer-suspended]\nenabled = false\n"
+    )
+    audit()
+    assert seen["catalog_called"] is False
+
+
+def test_catalog_section_filters_databases_and_min_failures_is_passed(fake_aws, tmp_path):
+    seen = fake_aws([])
+    (tmp_path / "glue-doctor.toml").write_text(
+        '[catalog]\ninclude = ["prod_*"]\n[checks.iceberg-optimizer-suspended]\nmin_failures = 3\n'
+    )
+    audit()
+    assert seen["database_filter"]("prod_sales") and not seen["database_filter"]("dev_sales")
+    assert seen["min_failures"] == 3

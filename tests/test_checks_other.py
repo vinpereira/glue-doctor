@@ -4,8 +4,8 @@ from glue_doctor.checks import REGISTRY
 from glue_doctor.checks.collect_error import NoParams, check_collect_error
 from glue_doctor.checks.observability import FLAGS, ObservabilityParams, check_observability
 from glue_doctor.checks.version import VersionParams, check_version
-from glue_doctor.models import CollectIssue, Severity
-from tests.factories import make_job
+from glue_doctor.models import CatalogScope, CollectIssue, Severity
+from tests.factories import make_job, make_optimizer
 
 # --- glue-version ---------------------------------------------------------
 
@@ -175,6 +175,42 @@ def test_collect_error_keeps_the_generic_hint_for_other_operations():
     assert "Grant the missing read permission" in finding.remediation
 
 
+def test_collect_error_for_a_table_snapshot():
+    issue = CollectIssue(
+        "BatchGetTableOptimizer", "AccessDeniedException", "example_db.example_table"
+    )
+    [finding] = check_collect_error(make_optimizer(collect_issues=(issue,)), NoParams())
+    assert (finding.resource_type, finding.resource) == ("table", "example_db.example_table")
+    assert finding.evidence["target"] == "example_db.example_table"
+    assert "glue:BatchGetTableOptimizer" in finding.remediation
+
+
+def test_collect_error_for_a_catalog_scope():
+    issue = CollectIssue("GetTables", "AccessDeniedException", "example_db")
+    [finding] = check_collect_error(CatalogScope("example_db", (issue,)), NoParams())
+    assert (finding.resource_type, finding.resource) == ("catalog", "example_db")
+    assert "glue:GetTables" in finding.remediation
+    assert "iceberg-optimizer-suspended" in finding.remediation
+
+
+def test_collect_error_s3_hint_only_for_denials():
+    denied = CollectIssue("GetBucketLifecycleConfiguration", "AccessDenied", "example-logs")
+    [with_hint] = check_collect_error(make_job(collect_issues=(denied,)), NoParams())
+    assert "s3:GetLifecycleConfiguration" in with_hint.remediation
+    assert with_hint.evidence["target"] == "example-logs"
+    for code in ("NoSuchBucket", "BucketRegionUnresolved", "EndpointConnectionError"):
+        issue = CollectIssue("GetBucketLifecycleConfiguration", code, "example-logs")
+        [finding] = check_collect_error(make_job(collect_issues=(issue,)), NoParams())
+        assert "s3:GetLifecycleConfiguration" not in finding.remediation
+        assert "Grant the missing read permission or retry" in finding.remediation
+
+
+def test_collect_error_without_a_target_has_no_target_key():
+    issue = CollectIssue("GetJobRuns", "AccessDeniedException")
+    [finding] = check_collect_error(make_job(collect_issues=(issue,)), NoParams())
+    assert "target" not in finding.evidence
+
+
 # --- registry -------------------------------------------------------------
 
 
@@ -185,6 +221,7 @@ def test_registry_order_and_contents():
         "glue-version",
         "observability-off",
         "spark-ui-no-lifecycle",
+        "iceberg-optimizer-suspended",
         "collect-error",
     ]
     assert {s.id for s in REGISTRY.values() if s.needs_runs} == {
@@ -194,3 +231,11 @@ def test_registry_order_and_contents():
     assert {s.id for s in REGISTRY.values() if s.needs_event_log_lifecycle} == {
         "spark-ui-no-lifecycle"
     }
+    assert {s.id for s in REGISTRY.values() if s.needs_catalog} == {"iceberg-optimizer-suspended"}
+    subjects = {s.id: s.subject for s in REGISTRY.values()}
+    assert subjects["iceberg-optimizer-suspended"] == "optimizer"
+    assert subjects["collect-error"] == "any"
+    job_subjects = {
+        v for k, v in subjects.items() if k not in ("iceberg-optimizer-suspended", "collect-error")
+    }
+    assert job_subjects == {"job"}

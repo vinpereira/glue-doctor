@@ -223,3 +223,28 @@ def test_catalog_defaults_and_selection():
 def test_invalid_catalog_section(text, fragment):
     with pytest.raises(ConfigError, match=fragment):
         parse(text)
+
+
+def test_needs_catalog_and_min_failures():
+    from glue_doctor.config import needs_catalog, optimizer_min_failures
+
+    assert needs_catalog(default_config()) is True
+    assert optimizer_min_failures(default_config()) == 2
+    off = parse("[checks.iceberg-optimizer-suspended]\nenabled = false")
+    assert needs_catalog(off) is False
+    custom = parse("[checks.iceberg-optimizer-suspended]\nmin_failures = 4\nstale_days = 3")
+    assert optimizer_min_failures(custom) == 4
+    assert custom.checks["iceberg-optimizer-suspended"].params.stale_days == 3
+
+
+@pytest.mark.parametrize(
+    "body, fragment",
+    [
+        ("min_failures = 0", "min_failures"),
+        ("stale_days = 0", "stale_days"),
+        ("bogus = 1", "bogus"),
+    ],
+)
+def test_optimizer_check_parameters_are_validated(body, fragment):
+    with pytest.raises(ConfigError, match=fragment):
+        parse(f"[checks.iceberg-optimizer-suspended]\n{body}")

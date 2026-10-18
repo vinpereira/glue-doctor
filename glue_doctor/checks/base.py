@@ -13,7 +13,8 @@ class CheckSpec:
     itself in `__post_init__` (raising ValueError). Checks with `needs_runs=True` must expose a
     `history` field, used to decide how many runs the collector fetches. Checks with
     `needs_event_log_lifecycle=True` make the collector read the S3 lifecycle configuration
-    of each Spark UI event-log bucket.
+    of each Spark UI event-log bucket. Checks with `needs_catalog=True` make it scan the Data
+    Catalog, and `subject` says which snapshots the check runs on.
     """
 
     id: str
@@ -23,3 +24,5 @@ class CheckSpec:
     run: Callable[[JobSnapshot, Any], list[Finding]]
     needs_runs: bool = False
     needs_event_log_lifecycle: bool = False
+    needs_catalog: bool = False
+    subject: str = "job"  # "job", "optimizer" or "any" (every snapshot kind, for collect-error)

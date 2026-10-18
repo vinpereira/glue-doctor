@@ -1,5 +1,6 @@
 from glue_doctor.checks.base import CheckSpec
 from glue_doctor.checks.collect_error import COLLECT_ERROR
+from glue_doctor.checks.iceberg_optimizer import ICEBERG_OPTIMIZER_SUSPENDED
 from glue_doctor.checks.observability import OBSERVABILITY_OFF
 from glue_doctor.checks.spark_ui import SPARK_UI_NO_LIFECYCLE
 from glue_doctor.checks.timeout import TIMEOUT_TOO_GENEROUS, TIMEOUT_TOO_TIGHT
@@ -13,6 +14,7 @@ REGISTRY: dict[str, CheckSpec] = {
         GLUE_VERSION,
         OBSERVABILITY_OFF,
         SPARK_UI_NO_LIFECYCLE,
+        ICEBERG_OPTIMIZER_SUSPENDED,
         COLLECT_ERROR,
     )
 }
